@@ -1,0 +1,9 @@
+inherits: default.yaml
+episode_seconds: 10.0
+rl:
+  episodes: 5000
+  eval_every: 100
+  save_every: 250
+  warmup_steps: 1000
+  update_after: 1000
+  batch_size: 256

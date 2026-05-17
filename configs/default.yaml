@@ -1,0 +1,89 @@
+seed: 42
+dt: 0.001
+control_dt: 0.01
+episode_seconds: 10.0
+settle_seconds: 1.0
+speed: 22.2222222222
+wheelbase: 2.7
+force_limit: 5000.0
+state_scale: 1.0
+road_scale: 0.1
+
+preview:
+  enabled_for: ["mpc", "rl"]
+  steps: 10
+  dt: 0.01
+
+reward:
+  body_acc: 1.0
+  pitch_acc: 0.4
+  suspension: 30.0
+  tire_load: 1.0e-8
+  control: 0.05
+
+mpc:
+  horizon: 10
+  max_iter: 15
+  replan_interval: 5
+  control_weight: 1.0e-7
+  delta_weight: 1.0e-8
+
+rl:
+  network: transformer_td3
+  hidden_sizes: [256, 256]
+  actor_lr: 0.00005
+  critic_lr: 0.001
+  gamma: 0.99
+  tau: 0.005
+  batch_size: 128
+  buffer_size: 200000
+  random_warmup: false
+  warmup_steps: 500
+  update_after: 500
+  update_every: 4
+  policy_delay: 2
+  target_noise: 0.2
+  noise_clip: 0.5
+  exploration_sigma: 120.0
+  action_l2_weight: 2.0
+  q_policy_weight: 0.01
+  gradient_clip: 1.0
+  preview_embed_dim: 64
+  transformer_layers: 2
+  transformer_heads: 4
+  transformer_ff_dim: 128
+  transformer_dropout: 0.0
+
+expert:
+  enabled: true
+  controllers: ["pid", "spdf", "mpc"]
+  episodes_per_scenario: 2
+  initial_ratio: 0.8
+  final_ratio: 0.3
+  decay_episodes: 300
+  bc_enabled: true
+  bc_pretrain_epochs: 3
+  bc_pretrain_steps_per_epoch: 200
+  bc_batch_size: 128
+  bc_initial_weight: 10.0
+  bc_final_weight: 2.0
+  bc_decay_episodes: 300
+
+scenarios:
+  - name: class_b
+    label: Class B
+    type: iso
+    level: B
+    speed: 22.2222222222
+    seed: 2334123341
+  - name: class_c
+    label: Class C
+    type: iso
+    level: C
+    speed: 8.3333333333
+    seed: 23341
+  - name: bump
+    label: Bump
+    type: bump
+    speed: 22.2222222222
+    seed: 2334123341

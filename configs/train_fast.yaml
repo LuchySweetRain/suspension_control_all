@@ -1,0 +1,30 @@
+inherits: default.yaml
+episode_seconds: 6.0
+mpc:
+  max_iter: 5
+  replan_interval: 10
+rl:
+  episodes: 200
+  eval_every: 20
+  save_every: 50
+  actor_lr: 0.00001
+  random_warmup: false
+  warmup_steps: 300
+  update_after: 300
+  batch_size: 64
+  update_every: 10
+  exploration_sigma: 80.0
+  action_l2_weight: 2.0
+  q_policy_weight: 0.005
+expert:
+  episodes_per_scenario: 1
+  initial_ratio: 0.8
+  final_ratio: 0.3
+  decay_episodes: 200
+  bc_enabled: true
+  bc_pretrain_epochs: 3
+  bc_pretrain_steps_per_epoch: 150
+  bc_batch_size: 64
+  bc_initial_weight: 10.0
+  bc_final_weight: 2.0
+  bc_decay_episodes: 200
