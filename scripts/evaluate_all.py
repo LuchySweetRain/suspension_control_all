@@ -21,8 +21,7 @@ def resolve_checkpoint(value: str | None, algorithm: str = "td3") -> str | None:
         raise ValueError(
             "Checkpoint path still contains the placeholder '<run>'. "
             "Use a real run directory, for example "
-            "results\\20260517_180625_td3\\checkpoints\\final.pt, "
-            "or pass --checkpoint latest."
+            "results\\20260517_180625_td3\\checkpoints\\final.pt."
         )
     if value.lower() == "latest":
         candidates = sorted(
@@ -43,26 +42,24 @@ def resolve_checkpoint(value: str | None, algorithm: str = "td3") -> str | None:
     return str(checkpoint)
 
 
-def resolve_checkpoints(value: str | None, legacy_checkpoint: str | None) -> dict[str, str]:
-    if value:
-        resolved = {}
-        for item in value.split(","):
-            if not item.strip():
-                continue
-            if "=" not in item:
-                raise ValueError("Use --checkpoints as algorithm=path pairs, for example td3=latest,sac=latest")
-            algorithm, checkpoint = item.split("=", 1)
-            algorithm = algorithm.strip().lower()
-            resolved[algorithm] = resolve_checkpoint(checkpoint.strip(), algorithm=algorithm)
-        return resolved
-    legacy = resolve_checkpoint(legacy_checkpoint, algorithm="td3")
-    return {"td3": legacy} if legacy else {}
+def resolve_checkpoints(value: str | None) -> dict[str, str]:
+    if not value:
+        return {}
+    resolved = {}
+    for item in value.split(","):
+        if not item.strip():
+            continue
+        if "=" not in item:
+            raise ValueError("Use --checkpoints as algorithm=path pairs, for example td3=latest,sac=latest")
+        algorithm, checkpoint = item.split("=", 1)
+        algorithm = algorithm.strip().lower()
+        resolved[algorithm] = resolve_checkpoint(checkpoint.strip(), algorithm=algorithm)
+    return resolved
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/default.yaml")
-    parser.add_argument("--checkpoint", default=None)
     parser.add_argument(
         "--checkpoints",
         default=None,
@@ -72,7 +69,7 @@ def main():
     args = parser.parse_args()
 
     config = load_config(ROOT / args.config)
-    checkpoints = resolve_checkpoints(args.checkpoints, args.checkpoint)
+    checkpoints = resolve_checkpoints(args.checkpoints)
     result_dir = Path(args.out) if args.out else ROOT / "results" / datetime.now().strftime("%Y%m%d_%H%M%S_eval")
     metrics, _ = evaluate_all(config, checkpoints, result_dir)
     print(metrics)
