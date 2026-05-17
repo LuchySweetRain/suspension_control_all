@@ -10,7 +10,7 @@ state_scale: 1.0
 road_scale: 0.1
 
 preview:
-  enabled_for: ["mpc", "rl"]
+  enabled_for: ["mpc", "rl", "td3", "ddpg", "sac", "ppo"]
   steps: 10
   dt: 0.01
 
@@ -53,6 +53,17 @@ rl:
   transformer_heads: 4
   transformer_ff_dim: 128
   transformer_dropout: 0.0
+  sac:
+    alpha: 0.2
+    automatic_entropy_tuning: true
+    alpha_lr: 0.00005
+  ppo:
+    lam: 0.95
+    clip_ratio: 0.2
+    train_epochs: 8
+    minibatch_size: 128
+    entropy_coef: 0.001
+    value_coef: 0.5
 
 expert:
   enabled: true

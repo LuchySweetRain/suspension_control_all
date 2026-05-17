@@ -14,7 +14,7 @@ from experiments.evaluation import evaluate_all
 from visualization.plots import plot_all
 
 
-def resolve_checkpoint(value: str | None) -> str | None:
+def resolve_checkpoint(value: str | None, algorithm: str = "td3") -> str | None:
     if not value:
         return None
     if "<run>" in value:
@@ -26,12 +26,14 @@ def resolve_checkpoint(value: str | None) -> str | None:
         )
     if value.lower() == "latest":
         candidates = sorted(
-            (ROOT / "results").glob("*_td3/checkpoints/final.pt"),
+            (ROOT / "results").glob(f"*_{algorithm}/checkpoints/final.pt"),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
         if not candidates:
-            raise FileNotFoundError("No TD3 checkpoint found under results\\*_td3\\checkpoints\\final.pt")
+            raise FileNotFoundError(
+                f"No {algorithm.upper()} checkpoint found under results\\*_{algorithm}\\checkpoints\\final.pt"
+            )
         return str(candidates[0])
     checkpoint = Path(value)
     if not checkpoint.is_absolute():
@@ -41,17 +43,38 @@ def resolve_checkpoint(value: str | None) -> str | None:
     return str(checkpoint)
 
 
+def resolve_checkpoints(value: str | None, legacy_checkpoint: str | None) -> dict[str, str]:
+    if value:
+        resolved = {}
+        for item in value.split(","):
+            if not item.strip():
+                continue
+            if "=" not in item:
+                raise ValueError("Use --checkpoints as algorithm=path pairs, for example td3=latest,sac=latest")
+            algorithm, checkpoint = item.split("=", 1)
+            algorithm = algorithm.strip().lower()
+            resolved[algorithm] = resolve_checkpoint(checkpoint.strip(), algorithm=algorithm)
+        return resolved
+    legacy = resolve_checkpoint(legacy_checkpoint, algorithm="td3")
+    return {"td3": legacy} if legacy else {}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/default.yaml")
     parser.add_argument("--checkpoint", default=None)
+    parser.add_argument(
+        "--checkpoints",
+        default=None,
+        help="Comma-separated algorithm=checkpoint pairs, e.g. td3=latest,ddpg=latest,sac=latest,ppo=latest",
+    )
     parser.add_argument("--out", default=None)
     args = parser.parse_args()
 
     config = load_config(ROOT / args.config)
-    checkpoint = resolve_checkpoint(args.checkpoint)
+    checkpoints = resolve_checkpoints(args.checkpoints, args.checkpoint)
     result_dir = Path(args.out) if args.out else ROOT / "results" / datetime.now().strftime("%Y%m%d_%H%M%S_eval")
-    metrics, _ = evaluate_all(config, checkpoint, result_dir)
+    metrics, _ = evaluate_all(config, checkpoints, result_dir)
     print(metrics)
     plot_all(result_dir)
     print(f"Saved evaluation to {result_dir}")

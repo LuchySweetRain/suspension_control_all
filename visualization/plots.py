@@ -12,6 +12,10 @@ STYLE = {
     "SPDF": ("tab:red", "-"),
     "MPC": ("tab:green", "--"),
     "RL": ("tab:purple", "-"),
+    "TD3": ("tab:purple", "-"),
+    "DDPG": ("tab:orange", "--"),
+    "SAC": ("tab:brown", "-."),
+    "PPO": ("tab:pink", ":"),
 }
 
 
@@ -110,4 +114,3 @@ def _simple_psd(time: np.ndarray, signal: np.ndarray):
     freq = np.fft.rfftfreq(signal.size, dt)
     pxx = (np.abs(spec) ** 2) * dt / max(signal.size, 1)
     return freq, pxx
-

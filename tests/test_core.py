@@ -12,10 +12,14 @@ if str(ROOT) not in sys.path:
 
 from config import load_config
 from controllers import MPCController, PIDController, SPDFController
+from controllers.rl_transformer import RLTransformerController
 from envs import HalfCarEnv
 from models import HalfCarModel, HalfCarParams
-from rl.networks import TransformerActor
+from rl.ddpg import DDPGConfig
+from rl.networks import TransformerActor, TransformerGaussianActor, TransformerValue
+from rl.ppo import PPOConfig, finish_ppo_trajectory
 from rl.replay_buffer import MixedReplaySampler, ReplayBuffer
+from rl.sac import SACConfig
 from rl.td3 import TD3Config
 from roads.road_profiles import RoadProfileFactory
 
@@ -97,6 +101,52 @@ def test_transformer_actor_output_shape():
     obs = torch.zeros(4, td3_cfg.obs_dim)
     action = actor(obs)
     assert action.shape == (4, 2)
+
+
+def test_transformer_gaussian_actor_and_value_shapes():
+    c = cfg()
+    sac_cfg = SACConfig.from_project_config(c)
+    actor = TransformerGaussianActor(sac_cfg)
+    value = TransformerValue(PPOConfig.from_project_config(c))
+    obs = torch.zeros(4, sac_cfg.obs_dim)
+    action, logp = actor.sample(obs)
+    assert action.shape == (4, 2)
+    assert logp.shape == (4, 1)
+    assert value(obs).shape == (4, 1)
+
+
+def test_rl_controller_algorithms_smoke():
+    c = cfg()
+    env = HalfCarEnv(c, scenario=c["scenarios"][0], use_preview=True)
+    obs, info = env.reset()
+    for algorithm in ("td3", "ddpg", "sac", "ppo"):
+        controller = RLTransformerController(c, algorithm=algorithm)
+        action = controller.compute_action(obs, info)
+        assert action.shape == (2,)
+        assert np.all(np.isfinite(action))
+        assert np.max(np.abs(action)) <= env.force_limit
+
+
+def test_ddpg_config_matches_td3_observation_space():
+    c = cfg()
+    td3_cfg = TD3Config.from_project_config(c)
+    ddpg_cfg = DDPGConfig.from_project_config(c)
+    assert ddpg_cfg.obs_dim == td3_cfg.obs_dim
+    assert ddpg_cfg.act_dim == td3_cfg.act_dim
+
+
+def test_ppo_advantage_finish_shapes():
+    returns, advantages = finish_ppo_trajectory(
+        rewards=[1.0, 1.0],
+        values=[0.5, 0.25],
+        dones=[False, True],
+        gamma=0.99,
+        lam=0.95,
+    )
+    assert len(returns) == 2
+    assert len(advantages) == 2
+    assert np.all(np.isfinite(returns))
+    assert np.all(np.isfinite(advantages))
 
 
 def test_controller_smoke_1s():

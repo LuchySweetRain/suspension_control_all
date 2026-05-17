@@ -100,6 +100,82 @@ class TransformerActor(nn.Module):
         return self.act_limit * self.head(x)
 
 
+class TransformerGaussianActor(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        self.cfg = cfg
+        self.spec = ObsSpec(cfg.obs_dim_base, cfg.preview_steps, cfg.preview_token_dim)
+        self.act_limit = cfg.act_limit
+        self.base_encoder = mlp(cfg.obs_dim_base, [cfg.base_encoder_dim, cfg.base_encoder_dim], cfg.base_encoder_dim)
+        self.preview_encoder = PreviewEncoder(
+            cfg.preview_token_dim,
+            cfg.preview_embed_dim,
+            cfg.transformer_layers,
+            cfg.transformer_heads,
+            cfg.transformer_ff_dim,
+            cfg.transformer_dropout,
+        )
+        feature_dim = cfg.base_encoder_dim + cfg.preview_embed_dim
+        hidden = mlp(feature_dim, cfg.hidden_sizes, cfg.hidden_sizes[-1] if cfg.hidden_sizes else feature_dim)
+        self.trunk = hidden
+        last_dim = cfg.hidden_sizes[-1] if cfg.hidden_sizes else feature_dim
+        self.mu = nn.Linear(last_dim, cfg.act_dim)
+        self.log_std = nn.Linear(last_dim, cfg.act_dim)
+        self.log_std_min = getattr(cfg, "log_std_min", -20.0)
+        self.log_std_max = getattr(cfg, "log_std_max", 2.0)
+
+    def _features(self, obs: torch.Tensor) -> torch.Tensor:
+        base, preview = self.spec.split(obs)
+        return self.trunk(torch.cat([self.base_encoder(base), self.preview_encoder(preview)], dim=-1))
+
+    def forward(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        x = self._features(obs)
+        mu = self.mu(x)
+        log_std = torch.clamp(self.log_std(x), self.log_std_min, self.log_std_max)
+        return mu, log_std
+
+    def sample(self, obs: torch.Tensor, deterministic: bool = False) -> tuple[torch.Tensor, torch.Tensor | None]:
+        mu, log_std = self(obs)
+        if deterministic:
+            pre_tanh = mu
+        else:
+            std = log_std.exp()
+            pre_tanh = mu + std * torch.randn_like(std)
+        squashed = torch.tanh(pre_tanh)
+        action = self.act_limit * squashed
+        if deterministic:
+            return action, None
+        std = log_std.exp()
+        normal_log_prob = -0.5 * (
+            ((pre_tanh - mu) / (std + 1e-8)).pow(2) + 2 * log_std + math.log(2 * math.pi)
+        )
+        log_prob = normal_log_prob.sum(dim=-1, keepdim=True)
+        log_prob -= torch.log(self.act_limit * (1 - squashed.pow(2)) + 1e-6).sum(dim=-1, keepdim=True)
+        return action, log_prob
+
+
+class TransformerValue(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        self.cfg = cfg
+        self.spec = ObsSpec(cfg.obs_dim_base, cfg.preview_steps, cfg.preview_token_dim)
+        self.base_encoder = mlp(cfg.obs_dim_base, [cfg.base_encoder_dim, cfg.base_encoder_dim], cfg.base_encoder_dim)
+        self.preview_encoder = PreviewEncoder(
+            cfg.preview_token_dim,
+            cfg.preview_embed_dim,
+            cfg.transformer_layers,
+            cfg.transformer_heads,
+            cfg.transformer_ff_dim,
+            cfg.transformer_dropout,
+        )
+        self.head = mlp(cfg.base_encoder_dim + cfg.preview_embed_dim, cfg.hidden_sizes, 1)
+
+    def forward(self, obs: torch.Tensor) -> torch.Tensor:
+        base, preview = self.spec.split(obs)
+        x = torch.cat([self.base_encoder(base), self.preview_encoder(preview)], dim=-1)
+        return self.head(x)
+
+
 class TransformerCritic(nn.Module):
     def __init__(self, cfg):
         super().__init__()
@@ -124,4 +200,3 @@ class TransformerCritic(nn.Module):
         base, preview = self.spec.split(obs)
         x = torch.cat([self.base_encoder(base), self.preview_encoder(preview), act], dim=-1)
         return self.head(x)
-

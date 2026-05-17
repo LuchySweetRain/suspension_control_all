@@ -6,11 +6,17 @@ from copy import deepcopy
 import numpy as np
 import pandas as pd
 
-from controllers import MPCController, PIDController, RLTransformerTD3Controller, SPDFController
+from controllers import MPCController, PIDController, RLTransformerController, SPDFController
 from envs import HalfCarEnv
 
 
-def make_controller(name: str, env: HalfCarEnv, config: dict, checkpoint: str | None = None):
+def make_controller(
+    name: str,
+    env: HalfCarEnv,
+    config: dict,
+    checkpoint: str | None = None,
+    algorithm: str | None = None,
+):
     key = name.lower()
     if key == "pid":
         return PIDController(env.params, env.control_dt, env.force_limit)
@@ -18,8 +24,8 @@ def make_controller(name: str, env: HalfCarEnv, config: dict, checkpoint: str | 
         return SPDFController(env.params, env.control_dt)
     if key == "mpc":
         return MPCController(env.model, config)
-    if key == "rl":
-        return RLTransformerTD3Controller(config, checkpoint=checkpoint)
+    if key in {"td3", "ddpg", "sac", "ppo", "rl"}:
+        return RLTransformerController(config, algorithm=algorithm or key, checkpoint=checkpoint)
     raise ValueError(f"Unknown controller: {name}")
 
 
@@ -92,21 +98,34 @@ def compute_metrics(df: pd.DataFrame, settle_seconds: float = 1.0) -> dict:
     }
 
 
-def evaluate_all(config: dict, checkpoint: str | None, result_dir: Path) -> tuple[pd.DataFrame, dict]:
+def evaluate_all(config: dict, checkpoints: str | dict[str, str] | None, result_dir: Path) -> tuple[pd.DataFrame, dict]:
     result_dir.mkdir(parents=True, exist_ok=True)
-    controllers = ["PID", "SPDF", "MPC", "RL"] if checkpoint else ["PID", "SPDF", "MPC"]
+    if isinstance(checkpoints, str):
+        rl_checkpoints = {"td3": checkpoints}
+    else:
+        rl_checkpoints = checkpoints or {}
+    controllers = ["PID", "SPDF", "MPC"] + [name.upper() for name in rl_checkpoints]
     trajectories = {}
     rows = []
     for scenario in config["scenarios"]:
         for controller_name in controllers:
-            use_preview = controller_name.lower() in set(config["preview"]["enabled_for"])
+            is_rl = controller_name.lower() in rl_checkpoints
+            use_preview = is_rl or controller_name.lower() in set(config["preview"]["enabled_for"])
             controller_config = deepcopy(config)
             if controller_name.lower() in {"pid", "spdf"}:
                 # Match active_suspension_sim.slx: classical controllers update at
                 # the fixed solver step, while MPC/RL use the preview/control step.
                 controller_config["control_dt"] = controller_config["dt"]
             env = HalfCarEnv(controller_config, scenario=scenario, use_preview=use_preview)
-            controller = make_controller(controller_name, env, controller_config, checkpoint=checkpoint)
+            algorithm = controller_name.lower() if is_rl else None
+            checkpoint = rl_checkpoints.get(algorithm) if algorithm else None
+            controller = make_controller(
+                controller_name,
+                env,
+                controller_config,
+                checkpoint=checkpoint,
+                algorithm=algorithm,
+            )
             run = rollout(env, controller, use_preview=use_preview)
             df = run["data"]
             key = f"{controller_name}_{scenario['name']}"

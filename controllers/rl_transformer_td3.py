@@ -6,6 +6,7 @@ import numpy as np
 import torch
 
 from .base import Controller
+from .rl_transformer import RLTransformerController
 from rl.td3 import TD3Agent, TD3Config
 
 
@@ -25,3 +26,7 @@ class RLTransformerTD3Controller(Controller):
     def compute_action(self, obs: np.ndarray, info: dict) -> np.ndarray:
         return self.agent.select_action(obs, noise=0.0)
 
+
+class TransformerTD3Controller(RLTransformerController):
+    def __init__(self, config: dict, checkpoint: str | Path | None = None, device: str | None = None):
+        super().__init__(config, algorithm="td3", checkpoint=checkpoint, device=device)
