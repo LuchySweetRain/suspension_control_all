@@ -29,6 +29,14 @@ def load_config(path: str | Path) -> dict[str, Any]:
     return data
 
 
+def apply_algorithm_overrides(config: dict[str, Any], algorithm: str) -> dict[str, Any]:
+    result = deepcopy(config)
+    overrides = result.get("rl", {}).get("algorithm_overrides", {}).get(algorithm.lower(), {})
+    if overrides:
+        result["rl"] = deep_update(result["rl"], overrides)
+    return result
+
+
 def as_namespace(data: dict[str, Any]):
     class Namespace:
         pass
@@ -39,4 +47,3 @@ def as_namespace(data: dict[str, Any]):
             value = as_namespace(value)
         setattr(ns, key, value)
     return ns
-

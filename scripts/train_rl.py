@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from config import load_config
+from config import apply_algorithm_overrides, load_config
 from controllers import MPCController, PIDController, SPDFController
 from envs import HalfCarEnv
 from rl.ddpg import DDPGAgent, DDPGConfig
@@ -268,7 +268,7 @@ def main():
     parser.add_argument("--episodes", type=int, default=None)
     args = parser.parse_args()
 
-    config = load_config(ROOT / args.config)
+    config = apply_algorithm_overrides(load_config(ROOT / args.config), args.algorithm)
     set_seed(int(config.get("seed", 42)))
     config_cls, agent_cls = AGENTS[args.algorithm]
     rl_cfg = config_cls.from_project_config(config)

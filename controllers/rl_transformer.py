@@ -6,6 +6,7 @@ import numpy as np
 import torch
 
 from .base import Controller
+from config import apply_algorithm_overrides
 from rl.ddpg import DDPGAgent, DDPGConfig
 from rl.ppo import PPOAgent, PPOConfig
 from rl.sac import SACAgent, SACConfig
@@ -31,6 +32,7 @@ class RLTransformerController(Controller):
         key = algorithm.lower()
         if key not in ALGORITHMS:
             raise ValueError(f"Unknown RL algorithm: {algorithm}")
+        config = apply_algorithm_overrides(config, key)
         config_cls, agent_cls, label = ALGORITHMS[key]
         self.name = label
         self.config = config_cls.from_project_config(config)

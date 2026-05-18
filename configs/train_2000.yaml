@@ -1,0 +1,56 @@
+inherits: default.yaml
+episode_seconds: 6.0
+mpc:
+  max_iter: 5
+  replan_interval: 10
+rl:
+  episodes: 2000
+  eval_every: 200
+  save_every: 500
+  actor_lr: 0.00001
+  critic_lr: 0.001
+  random_warmup: false
+  warmup_steps: 300
+  update_after: 300
+  batch_size: 64
+  update_every: 10
+  exploration_sigma: 80.0
+  action_l2_weight: 2.0
+  q_policy_weight: 0.005
+  algorithm_overrides:
+    sac:
+      actor_lr: 0.00003
+      critic_lr: 0.0003
+      update_every: 4
+      exploration_sigma: 1.0
+      sac:
+        alpha: 0.01
+        automatic_entropy_tuning: true
+        alpha_lr: 0.00001
+        target_entropy: -3.0
+        log_std_min: -8.0
+        log_std_max: -3.0
+    ppo:
+      actor_lr: 0.00003
+      critic_lr: 0.0003
+      ppo:
+        lam: 0.97
+        clip_ratio: 0.15
+        train_epochs: 6
+        minibatch_size: 256
+        entropy_coef: 0.0
+        value_coef: 0.5
+        log_std_min: -8.0
+        log_std_max: -3.5
+expert:
+  episodes_per_scenario: 1
+  initial_ratio: 0.8
+  final_ratio: 0.2
+  decay_episodes: 1200
+  bc_enabled: true
+  bc_pretrain_epochs: 3
+  bc_pretrain_steps_per_epoch: 150
+  bc_batch_size: 64
+  bc_initial_weight: 10.0
+  bc_final_weight: 0.5
+  bc_decay_episodes: 1200
