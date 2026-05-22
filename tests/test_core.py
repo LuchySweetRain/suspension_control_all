@@ -13,7 +13,7 @@ if str(ROOT) not in sys.path:
 from config import load_config
 from controllers import MPCController, PIDController, SPDFController
 from controllers.rl_transformer import RLTransformerController
-from envs import HalfCarEnv
+from envs import HalfCarEnv, MuJoCoHalfCarEnv
 from models import HalfCarModel, HalfCarParams
 from rl.ddpg import DDPGConfig
 from rl.networks import TransformerActor, TransformerGaussianActor, TransformerValue
@@ -147,6 +147,21 @@ def test_ppo_advantage_finish_shapes():
     assert len(advantages) == 2
     assert np.all(np.isfinite(returns))
     assert np.all(np.isfinite(advantages))
+
+
+def test_mujoco_half_car_env_render_smoke():
+    c = cfg()
+    c["episode_seconds"] = 0.05
+    env = MuJoCoHalfCarEnv(c, scenario=c["scenarios"][0], use_preview=True, width=160, height=90)
+    obs, _ = env.reset()
+    obs, reward, terminated, truncated, _ = env.step(np.zeros(2, dtype=np.float32))
+    frame = env.render()
+    env.close()
+    assert obs.shape == (env.obs_dim,)
+    assert np.isfinite(reward)
+    assert not terminated
+    assert frame.shape == (90, 160, 3)
+    assert frame.dtype == np.uint8
 
 
 def test_controller_smoke_1s():
