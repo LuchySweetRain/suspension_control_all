@@ -40,6 +40,7 @@ def rollout(env: HalfCarEnv, controller, use_preview: bool) -> dict:
         obs, reward, terminated, truncated, info = env.step(action)
         d = info["derived"]
         state = info["state"]
+        road = info["road"]
         records.append(
             {
                 "time": info["time"],
@@ -49,6 +50,8 @@ def rollout(env: HalfCarEnv, controller, use_preview: bool) -> dict:
                 "dtheta": state[3],
                 "zwf": state[4],
                 "zwr": state[6],
+                "zdf": road[0],
+                "zdr": road[2],
                 "ddzb": d["ddzb"],
                 "ddtheta": d["ddtheta"],
                 "delta_yf": d["delta_yf"],
