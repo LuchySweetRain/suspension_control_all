@@ -114,6 +114,7 @@ class MuJoCoHalfCarEnv(HalfCarEnv):
   <compiler angle="radian"/>
   <option timestep="{self.dt}" gravity="0 0 -9.81"/>
   <visual>
+    <global offwidth="{self.width}" offheight="{self.height}"/>
     <headlight ambient="0.45 0.45 0.45" diffuse="0.6 0.6 0.6" specular="0.2 0.2 0.2"/>
     <rgba haze="0.95 0.97 1 1"/>
   </visual>
