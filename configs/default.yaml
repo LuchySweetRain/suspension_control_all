@@ -98,3 +98,36 @@ scenarios:
     type: bump
     speed: 22.2222222222
     seed: 2334123341
+  - name: sine_long
+    label: Long Sine
+    type: sine
+    speed: 18.0
+    amplitude: 0.025
+    wavelength: 5.0
+  - name: step
+    label: Step
+    type: step
+    height: 0.05
+    start_time: 0.6
+  - name: pothole
+    label: Pothole
+    type: pothole
+    speed: 16.0
+    depth: 0.06
+    length: 0.5
+    start_time: 0.9
+  - name: mixed
+    label: Mixed Road
+    type: composite
+    speed: 18.0
+    components:
+      - type: iso
+        level: B
+        seed: 3021
+      - type: sine
+        amplitude: 0.012
+        wavelength: 3.5
+      - type: pothole
+        depth: 0.04
+        length: 0.45
+        start_time: 1.5
