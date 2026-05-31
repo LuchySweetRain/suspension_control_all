@@ -43,11 +43,15 @@ class TD3Config:
     @classmethod
     def from_project_config(cls, config: dict) -> "TD3Config":
         rl = config["rl"]
+        act_dim = int(rl.get("act_dim", 2))
+        history_cfg = dict(config.get("observation", {}).get("history", {}))
+        history_steps = int(history_cfg.get("steps", 0)) if history_cfg.get("enabled", False) else 0
+        obs_dim_base = 14 + history_steps * (14 + 2 * act_dim)
         return cls(
-            obs_dim_base=14,
+            obs_dim_base=int(rl.get("obs_dim_base", obs_dim_base)),
             preview_steps=int(config["preview"]["steps"]),
-            preview_token_dim=2,
-            act_dim=2,
+            preview_token_dim=int(rl.get("preview_token_dim", 2)),
+            act_dim=act_dim,
             act_limit=float(config["force_limit"]),
             hidden_sizes=list(rl["hidden_sizes"]),
             actor_lr=float(rl["actor_lr"]),

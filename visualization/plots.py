@@ -8,6 +8,8 @@ import pandas as pd
 
 
 STYLE = {
+    "PASSIVE": ("tab:gray", "-"),
+    "RANDOM": ("0.5", ":"),
     "PID": ("tab:blue", "-."),
     "SPDF": ("tab:red", "-"),
     "MPC": ("tab:green", "--"),
@@ -66,9 +68,10 @@ def _plot_response(trajs: dict[str, pd.DataFrame], fig_dir: Path):
 
 
 def _plot_control(trajs: dict[str, pd.DataFrame], fig_dir: Path):
+    scenario = _select_reference_scenario(trajs)
     fig, axes = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
     for key, df in trajs.items():
-        if not key.endswith("class_b"):
+        if key.split("_", 1)[1] != scenario:
             continue
         ctrl = key.split("_", 1)[0]
         color, ls = STYLE.get(ctrl, ("k", "-"))
@@ -81,14 +84,15 @@ def _plot_control(trajs: dict[str, pd.DataFrame], fig_dir: Path):
         ax.grid(True, alpha=0.3)
         ax.legend()
     fig.tight_layout()
-    fig.savefig(fig_dir / "control_input_class_b.png", dpi=200)
+    fig.savefig(fig_dir / f"control_input_{scenario}.png", dpi=200)
     plt.close(fig)
 
 
 def _plot_psd(trajs: dict[str, pd.DataFrame], fig_dir: Path):
+    scenario = _select_reference_scenario(trajs)
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
     for key, df in trajs.items():
-        if not key.endswith("class_b"):
+        if key.split("_", 1)[1] != scenario:
             continue
         ctrl = key.split("_", 1)[0]
         color, ls = STYLE.get(ctrl, ("k", "-"))
@@ -103,8 +107,14 @@ def _plot_psd(trajs: dict[str, pd.DataFrame], fig_dir: Path):
         ax.grid(True, which="both", alpha=0.3)
         ax.legend()
     fig.tight_layout()
-    fig.savefig(fig_dir / "psd_summary_class_b.png", dpi=200)
+    fig.savefig(fig_dir / f"psd_summary_{scenario}.png", dpi=200)
     plt.close(fig)
+
+
+def _select_reference_scenario(trajs: dict[str, pd.DataFrame]) -> str:
+    scenarios = sorted({name.split("_", 1)[1] for name in trajs})
+    class_b = [name for name in scenarios if "class_b" in name]
+    return class_b[0] if class_b else scenarios[0]
 
 
 def _simple_psd(time: np.ndarray, signal: np.ndarray):

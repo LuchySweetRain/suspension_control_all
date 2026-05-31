@@ -1,0 +1,49 @@
+inherits: mujoco_full_car.yaml
+
+full_car:
+  action_mode: corner
+  preview_mode: corner
+  track_width: 1.62
+  roll_inertia: 520.0
+  lateral_mode: independent
+  lateral_roughness_scale: 0.5
+
+domain_randomization:
+  enabled: true
+  speed_scale: 0.15
+  mass_scale: 0.10
+  inertia_scale: 0.15
+  suspension_stiffness_scale: 0.20
+  suspension_damping_scale: 0.20
+  tire_stiffness_scale: 0.15
+  tire_damping_scale: 0.15
+  road_amplitude_scale: 0.25
+
+preview_error:
+  enabled: true
+  delay_steps: 1
+  height_noise_std: 0.002
+  bias_std: 0.001
+  dropout_prob: 0.02
+  scale_error_std: 0.03
+
+actuator:
+  enabled: true
+  time_constant: 0.02
+  rate_limit: 200000.0
+
+scenario_sampling:
+  mode: weighted
+  weights:
+    class_b_correlated: 0.30
+    class_c_correlated: 0.25
+    sine_roll: 0.15
+    pothole_roll: 0.15
+    mixed_full: 0.15
+
+rl:
+  act_dim: 4
+  preview_token_dim: 4
+  exploration_sigma: 60.0
+  sac:
+    target_entropy: -4.0

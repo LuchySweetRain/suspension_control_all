@@ -1,0 +1,10 @@
+inherits: mujoco_full_car_history.yaml
+
+residual_control:
+  enabled: true
+  prior: full_car_mpc_lite
+  scale: 0.5
+
+evaluation:
+  controllers: ["PASSIVE", "FULL_CAR_MPC_LITE"]
+

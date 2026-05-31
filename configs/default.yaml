@@ -9,6 +9,14 @@ force_limit: 5000.0
 state_scale: 1.0
 road_scale: 0.1
 
+observation:
+  mode: privileged
+  state_noise_std: 0.0
+  estimator_alpha: 0.35
+  history:
+    enabled: false
+    steps: 0
+
 preview:
   enabled_for: ["mpc", "rl", "td3", "ddpg", "sac", "ppo"]
   steps: 10
@@ -20,6 +28,11 @@ reward:
   suspension: 30.0
   tire_load: 1.0e-8
   control: 0.05
+  action_delta: 0.0
+  command_delta: 0.0
+  actuator_tracking: 0.0
+  saturation: 0.0
+  energy: 0.0
 
 mpc:
   horizon: 10
@@ -27,6 +40,20 @@ mpc:
   replan_interval: 5
   control_weight: 1.0e-7
   delta_weight: 1.0e-8
+
+reduced_full_car_mpc:
+  k_z: 1200.0
+  k_dz: 1800.0
+  k_pitch: 950.0
+  k_dpitch: 700.0
+  k_roll: 850.0
+  k_droll: 650.0
+  k_preview: 18000.0
+
+residual_control:
+  enabled: false
+  prior: spdf
+  scale: 0.5
 
 rl:
   network: transformer_td3

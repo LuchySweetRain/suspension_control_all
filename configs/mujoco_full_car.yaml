@@ -1,0 +1,76 @@
+inherits: mujoco_vehicle.yaml
+
+environment:
+  engine: mujoco_full_car
+
+evaluation:
+  controllers: ["PASSIVE"]
+
+full_car:
+  track_width: 1.62
+  roll_inertia: 520.0
+  lateral_mode: correlated
+  lateral_roughness_scale: 0.35
+
+actuator:
+  enabled: false
+  time_constant: 0.02
+  rate_limit: 200000.0
+
+safety_limits:
+  max_suspension_travel: 0.25
+  max_pitch: 0.45
+  max_roll: 0.45
+  max_wheel_displacement: 1.0
+  terminate_on_unsafe: false
+  unsafe_penalty: 10.0
+
+reward:
+  body_acc: 1.0
+  pitch_acc: 0.4
+  roll_acc: 0.25
+  suspension: 18.0
+  tire_load: 5.0e-9
+  control: 0.05
+
+scenarios:
+  - name: class_b_correlated
+    label: Class B Correlated
+    type: iso
+    level: B
+    speed: 22.2222222222
+    seed: 2334123341
+  - name: class_c_correlated
+    label: Class C Correlated
+    type: iso
+    level: C
+    speed: 12.0
+    seed: 23341
+  - name: sine_roll
+    label: Sine Roll Excitation
+    type: sine
+    speed: 18.0
+    amplitude: 0.025
+    wavelength: 5.0
+  - name: pothole_roll
+    label: Pothole Roll Excitation
+    type: pothole
+    speed: 16.0
+    depth: 0.06
+    length: 0.55
+    start_time: 0.9
+  - name: mixed_full
+    label: Mixed Full-Car Road
+    type: composite
+    speed: 18.0
+    components:
+      - type: iso
+        level: B
+        seed: 3021
+      - type: sine
+        amplitude: 0.01
+        wavelength: 3.5
+      - type: bump
+        height: 0.04
+        length: 0.45
+        start_time: 1.6

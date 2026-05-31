@@ -1,0 +1,25 @@
+inherits: mujoco_full_car_corner.yaml
+
+observation:
+  mode: estimated
+  state_noise_std: 0.0
+  estimator_alpha: 0.35
+  history:
+    enabled: true
+    steps: 5
+
+residual_control:
+  enabled: false
+  prior: spdf
+  scale: 0.5
+
+reward:
+  action_delta: 0.05
+  command_delta: 0.02
+  actuator_tracking: 0.05
+  saturation: 0.5
+  energy: 1.0e-6
+
+rl:
+  obs_dim_base: 124
+

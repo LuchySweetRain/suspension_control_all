@@ -1,0 +1,71 @@
+inherits: train_fast.yaml
+
+environment:
+  engine: mujoco_vehicle
+
+evaluation:
+  controllers: ["PASSIVE"]
+
+mujoco:
+  settle_seconds: 1.5
+
+episode_seconds: 4.0
+
+rl:
+  episodes: 100
+  eval_every: 10
+  save_every: 25
+  random_warmup: true
+  warmup_steps: 500
+  update_after: 500
+  batch_size: 64
+  exploration_sigma: 80.0
+
+expert:
+  enabled: false
+  initial_ratio: 0.0
+  final_ratio: 0.0
+  bc_enabled: false
+
+scenarios:
+  - name: class_b
+    label: Class B
+    type: iso
+    level: B
+    speed: 22.2222222222
+    seed: 2334123341
+  - name: sine_long
+    label: Long Sine
+    type: sine
+    speed: 18.0
+    amplitude: 0.025
+    wavelength: 5.0
+  - name: bump
+    label: Bump
+    type: bump
+    speed: 22.2222222222
+    height: 0.08
+    length: 0.35
+    start_time: 0.8
+  - name: pothole
+    label: Pothole
+    type: pothole
+    speed: 16.0
+    depth: 0.06
+    length: 0.5
+    start_time: 0.9
+  - name: mixed
+    label: Mixed Road
+    type: composite
+    speed: 18.0
+    components:
+      - type: iso
+        level: B
+        seed: 3021
+      - type: sine
+        amplitude: 0.012
+        wavelength: 3.5
+      - type: pothole
+        depth: 0.04
+        length: 0.45
+        start_time: 1.5
