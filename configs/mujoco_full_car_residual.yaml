@@ -4,7 +4,26 @@ residual_control:
   enabled: true
   prior: full_car_mpc_lite
   scale: 0.5
+  gate:
+    enabled: true
+    min_scale: 0.0
+    max_scale: 0.5
+    delay_weight: 0.05
+    noise_weight: 80.0
+    bias_weight: 50.0
+    dropout_weight: 1.0
+    scale_error_weight: 1.0
+
+imitation:
+  enabled: false
+  dataset: datasets/expert/full_car_mpc_lite.npz
+  epochs: 20
+  batch_size: 256
+  max_steps_per_epoch: null
+  residual_targets: true
+
+reward:
+  deviation: 0.05
 
 evaluation:
   controllers: ["PASSIVE", "FULL_CAR_MPC_LITE"]
-

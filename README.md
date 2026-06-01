@@ -12,6 +12,11 @@ Controllers:
 - Transformer-SAC with road preview
 - Transformer-PPO with road preview
 
+Research direction:
+
+- The current thesis-oriented algorithm plan focuses on offline imitation initialization followed by online safe residual PPO for full-car active suspension control. See `docs/offline_imitation_online_ppo_plan.md`.
+- The SI-RPPO ablation entry point is `scripts/run_si_rppo_ablation.py`, covering PPO from scratch, BC-PPO, residual BC-PPO, and safe residual BC-PPO.
+
 Environments:
 
 - `HalfCarEnv`: fast pure-Python RK4 half-car environment for controller comparison.
@@ -39,6 +44,20 @@ Run quick checks:
 ```bash
 python -m pip install -r requirements.txt
 python -m pytest tests
+```
+
+Generate the SI-RPPO ablation configs without launching long training:
+
+```bash
+python scripts/run_si_rppo_ablation.py --config configs/mujoco_full_car_safe_ppo.yaml --episodes 200 --expert-episodes 20 --dry-run
+```
+
+The runner writes `combined_metrics.csv`, `si_rppo_claim_report.json`, and `si_rppo_claim_report.md` under the selected result directory.
+
+Run a fast SI-RPPO smoke ablation on one short scenario:
+
+```bash
+python scripts/run_si_rppo_ablation.py --config configs/mujoco_full_car_safe_ppo.yaml --episodes 1 --expert-episodes 1 --expert-max-steps 2 --train-scenario-limit 1 --eval-scenario-limit 1 --episode-seconds 0.05 --mujoco-settle-seconds 0.2 --variants safe_residual_bc_ppo
 ```
 
 Train a small Transformer-TD3 run:

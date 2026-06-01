@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from controllers import MPCController, PIDController, ReducedFullCarPreviewController, RLTransformerController, SPDFController
-from controllers.prior import adapt_action_to_env, compute_prior_action, make_prior_controller
+from controllers.prior import adapt_action_to_env, compute_prior_action, make_prior_controller, residual_gate
 from envs import HalfCarEnv, MuJoCoFullCarEnv, MuJoCoVehicleEnv
 
 
@@ -43,6 +43,7 @@ class ResidualController:
         self.residual = residual
         self.env = env
         self.residual_scale = float(residual_scale)
+        self.last_prior_action = np.zeros(env.action_space.shape, dtype=np.float32)
 
     def reset(self):
         if self.prior is not None:
@@ -51,12 +52,17 @@ class ResidualController:
 
     def compute_action(self, obs, info):
         prior_action = compute_prior_action(self.prior, self.env, obs, info)
+        self.last_prior_action = prior_action.copy()
         residual_action = adapt_action_to_env(self.residual.compute_action(obs, info), self.env)
+        scale = residual_gate(info, {"scale": self.residual_scale, "gate": getattr(self, "gate_cfg", {})})
         return np.clip(
-            prior_action + self.residual_scale * residual_action,
+            prior_action + scale * residual_action,
             self.env.action_space.low,
             self.env.action_space.high,
         ).astype(np.float32)
+
+    def prior_action(self, obs, info):
+        return self.last_prior_action.copy()
 
 
 def make_env(config: dict, scenario: dict, use_preview: bool = True):
@@ -95,7 +101,9 @@ def make_controller(
         residual_cfg = dict(config.get("residual_control", {}))
         if residual_cfg.get("enabled", False):
             prior = make_prior_controller(str(residual_cfg.get("prior", "spdf")), env, config)
-            return ResidualController(prior, rl, env, float(residual_cfg.get("scale", 1.0)))
+            controller = ResidualController(prior, rl, env, float(residual_cfg.get("scale", 1.0)))
+            controller.gate_cfg = dict(residual_cfg.get("gate", {}))
+            return controller
         return rl
     raise ValueError(f"Unknown controller: {name}")
 
@@ -108,7 +116,10 @@ def rollout(env: HalfCarEnv, controller, use_preview: bool) -> dict:
     while not done:
         obs_for_controller = obs if use_preview else obs[: env.base_obs_dim]
         action = controller.compute_action(obs_for_controller, info)
-        obs, reward, terminated, truncated, info = env.step(action)
+        step_action = action
+        if hasattr(controller, "prior_action"):
+            step_action = {"action": action, "prior_action": controller.prior_action(obs_for_controller, info)}
+        obs, reward, terminated, truncated, info = env.step(step_action)
         d = info["derived"]
         state = info["state"]
         road = info["road"]
@@ -216,6 +227,7 @@ def compute_metrics(df: pd.DataFrame, settle_seconds: float = 1.0) -> dict:
         "action_command_delta_rms",
         "action_actuator_tracking_rms",
         "action_saturation_ratio",
+        "action_deviation_rms",
     ):
         if column in df.columns:
             label = {
@@ -223,6 +235,7 @@ def compute_metrics(df: pd.DataFrame, settle_seconds: float = 1.0) -> dict:
                 "action_command_delta_rms": "CommandDeltaRMS_N",
                 "action_actuator_tracking_rms": "ActuatorTrackingRMS_N",
                 "action_saturation_ratio": "ActuatorSaturationRatio",
+                "action_deviation_rms": "ActionDeviationRMS_N",
             }[column]
             metrics[label] = float(view[column].mean())
     for column in [name for name in df.columns if name.startswith("reward_")]:

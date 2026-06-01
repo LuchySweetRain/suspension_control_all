@@ -1,0 +1,22 @@
+inherits: mujoco_full_car_residual.yaml
+
+imitation:
+  enabled: true
+  dataset: datasets/expert/full_car_mpc_lite.npz
+  epochs: 20
+  batch_size: 256
+  max_steps_per_epoch: null
+  residual_targets: true
+
+rl:
+  episodes: 200
+  eval_every: 10
+  save_every: 25
+  ppo:
+    lam: 0.95
+    clip_ratio: 0.12
+    train_epochs: 6
+    minibatch_size: 256
+    entropy_coef: 0.0005
+    value_coef: 0.5
+

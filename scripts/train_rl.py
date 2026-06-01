@@ -17,7 +17,7 @@ if str(ROOT) not in sys.path:
 
 from config import apply_algorithm_overrides, load_config
 from controllers import MPCController, PIDController, SPDFController
-from controllers.prior import adapt_action_to_env, compute_prior_action, make_prior_controller
+from controllers.prior import adapt_action_to_env, compute_prior_action, make_prior_controller, residual_gate
 from envs import HalfCarEnv, MuJoCoFullCarEnv, MuJoCoVehicleEnv
 from rl.ddpg import DDPGAgent, DDPGConfig
 from rl.ppo import PPOAgent, PPOConfig, finish_ppo_trajectory
@@ -166,7 +166,6 @@ def evaluate_agent(agent, config: dict) -> dict:
     scenario_returns = {}
     residual_cfg = dict(config.get("residual_control", {}))
     residual_enabled = bool(residual_cfg.get("enabled", False))
-    residual_scale = float(residual_cfg.get("scale", 1.0))
     for scenario in config["scenarios"]:
         env = make_env(config, scenario=scenario, use_preview=True)
         obs, info = env.reset()
@@ -180,14 +179,17 @@ def evaluate_agent(agent, config: dict) -> dict:
             if residual_enabled:
                 prior_action = compute_prior_action(prior, env, obs, info)
                 residual_action = adapt_action_to_env(residual_action, env)
+                scale = residual_gate(info, residual_cfg)
                 action = np.clip(
-                    prior_action + residual_scale * residual_action,
+                    prior_action + scale * residual_action,
                     env.action_space.low,
                     env.action_space.high,
                 )
             else:
                 action = residual_action
-            obs, reward, terminated, truncated, info = env.step(action)
+                prior_action = None
+            step_action = {"action": action, "prior_action": prior_action} if residual_enabled else action
+            obs, reward, terminated, truncated, info = env.step(step_action)
             ep_return += reward
             done = terminated or truncated
         env.close()
@@ -202,6 +204,45 @@ def save_best_if_needed(agent, ckpt_dir: Path, eval_summary: dict, best_eval_ret
             json.dump({"episode": episode, **eval_summary}, f, indent=2)
         return eval_summary["mean_return"]
     return best_eval_return
+
+
+def pretrain_ppo_from_imitation(agent: PPOAgent, config: dict, run_dir: Path) -> list[float]:
+    imitation_cfg = dict(config.get("imitation", {}))
+    if not imitation_cfg.get("enabled", False):
+        return []
+    dataset_path = Path(str(imitation_cfg.get("dataset", "")))
+    if not dataset_path.is_absolute():
+        dataset_path = ROOT / dataset_path
+    if not dataset_path.is_file():
+        raise FileNotFoundError(f"imitation.dataset does not exist: {dataset_path}")
+    data = np.load(dataset_path, allow_pickle=True)
+    obs = np.asarray(data["obs"], dtype=np.float32)
+    action_key = "residual_act" if imitation_cfg.get("residual_targets", False) else "act"
+    if action_key not in data:
+        raise KeyError(f"imitation dataset missing {action_key!r}")
+    act = np.asarray(data[action_key], dtype=np.float32)
+    if obs.shape[1] != agent.cfg.obs_dim:
+        raise ValueError(f"imitation obs dim {obs.shape[1]} does not match PPO obs dim {agent.cfg.obs_dim}")
+    if act.shape[1] != agent.cfg.act_dim:
+        raise ValueError(f"imitation act dim {act.shape[1]} does not match PPO act dim {agent.cfg.act_dim}")
+    losses = agent.pretrain_actor_bc(
+        obs,
+        act,
+        epochs=int(imitation_cfg.get("epochs", 0)),
+        batch_size=int(imitation_cfg.get("batch_size", config["rl"].get("batch_size", 128))),
+        max_steps_per_epoch=imitation_cfg.get("max_steps_per_epoch"),
+    )
+    if losses:
+        out = {
+            "dataset": str(dataset_path.resolve()),
+            "action_key": action_key,
+            "samples": int(obs.shape[0]),
+            "losses": losses,
+        }
+        with (run_dir / "imitation_pretrain.json").open("w", encoding="utf-8") as f:
+            json.dump(out, f, indent=2)
+        print("PPO imitation BC losses: " + ", ".join(f"{loss:.6f}" for loss in losses))
+    return losses
 
 
 def train_off_policy(agent, rl_cfg, config: dict, algorithm: str, run_dir: Path, episodes: int):
@@ -235,7 +276,6 @@ def train_off_policy(agent, rl_cfg, config: dict, algorithm: str, run_dir: Path,
     random_warmup = bool(config["rl"].get("random_warmup", len(expert_replay) == 0))
     residual_cfg = dict(config.get("residual_control", {}))
     residual_enabled = bool(residual_cfg.get("enabled", False))
-    residual_scale = float(residual_cfg.get("scale", 1.0))
     history, eval_history = [], []
     total_steps = 0
     best_eval_return = -float("inf")
@@ -269,14 +309,17 @@ def train_off_policy(agent, rl_cfg, config: dict, algorithm: str, run_dir: Path,
             if residual_enabled:
                 prior_action = compute_prior_action(prior, env, obs, info)
                 residual_action = adapt_action_to_env(residual_action, env)
+                scale = residual_gate(info, residual_cfg)
                 action = np.clip(
-                    prior_action + residual_scale * residual_action,
+                    prior_action + scale * residual_action,
                     env.action_space.low,
                     env.action_space.high,
                 )
             else:
                 action = residual_action
-            next_obs, reward, terminated, truncated, next_info = env.step(action)
+                prior_action = None
+            step_action = {"action": action, "prior_action": prior_action} if residual_enabled else action
+            next_obs, reward, terminated, truncated, next_info = env.step(step_action)
             done = terminated or truncated
             replay.store(obs, residual_action, reward, next_obs, done)
             obs = next_obs
@@ -321,26 +364,46 @@ def train_ppo(agent: PPOAgent, config: dict, run_dir: Path, episodes: int):
     eval_every = int(config["rl"].get("eval_every", 0))
     ckpt_dir = run_dir / "checkpoints"
     scenario_sampler = ScenarioSampler(list(config["scenarios"]), config)
+    residual_cfg = dict(config.get("residual_control", {}))
+    residual_enabled = bool(residual_cfg.get("enabled", False))
     pbar = trange(episodes, desc="PPO")
     for episode in pbar:
         scenario = scenario_sampler.select(episode)
         env = make_env(config, scenario=scenario, use_preview=True)
-        obs, _ = env.reset()
+        obs, info = env.reset()
+        prior = make_prior_controller(str(residual_cfg.get("prior", "spdf")), env, config) if residual_enabled else None
+        if prior is not None:
+            prior.reset()
         done = False
         trajectory = {"obs": [], "act": [], "logp": [], "rew": [], "value": [], "done": []}
         ep_return = 0.0
         while not done:
-            action, logp, value = agent.act_for_training(obs)
-            next_obs, reward, terminated, truncated, _ = env.step(action)
+            residual_action, logp, value = agent.act_for_training(obs)
+            if residual_enabled:
+                prior_action = compute_prior_action(prior, env, obs, info)
+                residual_action = adapt_action_to_env(residual_action, env)
+                scale = residual_gate(info, residual_cfg)
+                action = np.clip(
+                    prior_action + scale * residual_action,
+                    env.action_space.low,
+                    env.action_space.high,
+                )
+            else:
+                action = residual_action
+                prior_action = None
+            step_action = {"action": action, "prior_action": prior_action} if residual_enabled else action
+            next_obs, reward, terminated, truncated, next_info = env.step(step_action)
             done = terminated or truncated
             trajectory["obs"].append(obs)
-            trajectory["act"].append(action)
+            trajectory["act"].append(residual_action)
             trajectory["logp"].append(logp)
             trajectory["rew"].append(reward)
             trajectory["value"].append(value)
             trajectory["done"].append(done)
             obs = next_obs
+            info = next_info
             ep_return += reward
+        env.close()
         returns, adv = finish_ppo_trajectory(
             trajectory["rew"],
             trajectory["value"],
@@ -409,6 +472,9 @@ def main():
         )
 
     if args.algorithm == "ppo":
+        pretrain_losses = pretrain_ppo_from_imitation(agent, config, run_dir)
+        if pretrain_losses:
+            agent.save(ckpt_dir / "imitation_pretrained.pt")
         history, eval_history = train_ppo(agent, config, run_dir, episodes)
     else:
         history, eval_history = train_off_policy(agent, rl_cfg, config, args.algorithm, run_dir, episodes)

@@ -2,6 +2,14 @@
 
 Date: 2026-05-28
 
+Update 2026-05-31:
+
+The thesis direction is narrowed to **offline-imitation-initialized online safe residual PPO**. TD3/SAC remain important off-policy baselines, but PPO is the main algorithmic path because it is more suitable for conservative online policy updates in a safety-critical continuous-control suspension system. The detailed algorithm plan is maintained in `docs/offline_imitation_online_ppo_plan.md`.
+
+The updated main claim is:
+
+**A PPO policy initialized by offline imitation and constrained as a residual controller can provide safer and more stable online improvement than PPO from scratch under road-preview uncertainty and actuator dynamics.**
+
 ## Current Project Baseline
 
 The repository already contains a useful experimental base for active suspension control:
@@ -294,4 +302,3 @@ The first slice should be small and verifiable:
 - Add tests that verify metric keys exist for `MuJoCoFullCarEnv`.
 
 This slice does not change training behavior, but it creates the evidence base needed for every later optimization.
-

@@ -33,6 +33,7 @@ reward:
   actuator_tracking: 0.0
   saturation: 0.0
   energy: 0.0
+  deviation: 0.0
 
 mpc:
   horizon: 10
@@ -54,6 +55,15 @@ residual_control:
   enabled: false
   prior: spdf
   scale: 0.5
+  gate:
+    enabled: false
+    min_scale: 0.0
+    max_scale: 0.5
+    delay_weight: 0.05
+    noise_weight: 80.0
+    bias_weight: 50.0
+    dropout_weight: 1.0
+    scale_error_weight: 1.0
 
 rl:
   network: transformer_td3

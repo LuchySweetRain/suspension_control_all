@@ -150,6 +150,43 @@ class PPOAgent:
                 value_losses.append(float(value_loss.item()))
         return float(np.mean(value_losses)), float(np.mean(actor_losses))
 
+    def pretrain_actor_bc(
+        self,
+        obs: np.ndarray,
+        act: np.ndarray,
+        epochs: int,
+        batch_size: int,
+        max_steps_per_epoch: int | None = None,
+    ) -> list[float]:
+        obs = np.asarray(obs, dtype=np.float32)
+        act = np.asarray(act, dtype=np.float32)
+        if obs.ndim != 2 or obs.shape[1] != self.cfg.obs_dim:
+            raise ValueError(f"BC obs must have shape (N, {self.cfg.obs_dim}), got {obs.shape}")
+        if act.ndim != 2 or act.shape[1] != self.cfg.act_dim:
+            raise ValueError(f"BC act must have shape (N, {self.cfg.act_dim}), got {act.shape}")
+        if len(obs) == 0 or epochs <= 0:
+            return []
+        n = obs.shape[0]
+        losses: list[float] = []
+        steps_per_epoch = max(1, int(np.ceil(n / max(1, batch_size))))
+        if max_steps_per_epoch is not None:
+            steps_per_epoch = min(steps_per_epoch, max(1, int(max_steps_per_epoch)))
+        obs_t = torch.as_tensor(obs, dtype=torch.float32, device=self.device)
+        act_t = torch.as_tensor(act, dtype=torch.float32, device=self.device)
+        for _ in range(int(epochs)):
+            epoch_losses = []
+            for _ in range(steps_per_epoch):
+                idx = torch.randint(0, n, (int(batch_size),), device=self.device)
+                pred, _ = self.actor.sample(obs_t[idx], deterministic=True)
+                loss = nn.MSELoss()(pred / self.cfg.act_limit, act_t[idx] / self.cfg.act_limit)
+                self.actor_optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.cfg.gradient_clip)
+                self.actor_optimizer.step()
+                epoch_losses.append(float(loss.item()))
+            losses.append(float(np.mean(epoch_losses)))
+        return losses
+
     def save(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
         torch.save(

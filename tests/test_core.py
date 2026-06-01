@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import torch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,6 +15,7 @@ if str(ROOT) not in sys.path:
 from config import load_config
 from controllers import MPCController, PIDController, SPDFController
 from controllers.rl_transformer import RLTransformerController
+from controllers.prior import residual_gate
 from envs import HalfCarEnv, MuJoCoFullCarEnv, MuJoCoHalfCarEnv, MuJoCoVehicleEnv
 from experiments.evaluation import evaluate_all, make_controller
 from scripts.benchmark_vector_env import benchmark_vector_env
@@ -23,16 +25,20 @@ from scripts.import_road_directory import import_road_directory
 from scripts.preflight_mujoco_training import preflight_mujoco_training
 from scripts.check_gym_registration import check_registration
 from scripts.collect_env_statistics import collect_env_statistics
+from scripts.collect_expert_dataset import collect_expert_dataset
 from scripts.run_mujoco_benchmark import run_benchmark
 from scripts.run_mujoco_robustness_matrix import run_robustness_matrix
+from scripts.run_si_rppo_ablation import build_claim_report, run_si_rppo_ablation
 from scripts.summarize_benchmark import build_report
 from scripts.train_rl import ScenarioSampler
+from scripts.train_rl import pretrain_ppo_from_imitation
 from scripts.validate_training_config import validate_config
 from scripts.validate_mujoco_env import validate_environment
 from models import HalfCarModel, HalfCarParams
 from rl.ddpg import DDPGConfig
 from rl.networks import TransformerActor, TransformerGaussianActor, TransformerValue
 from rl.ppo import PPOConfig, finish_ppo_trajectory
+from rl.ppo import PPOAgent
 from rl.replay_buffer import MixedReplaySampler, ReplayBuffer
 from rl.sac import SACConfig
 from rl.td3 import TD3Config
@@ -562,6 +568,175 @@ def test_reduced_full_car_preview_controller_smoke():
     assert action.shape == env.action_space.shape
     assert np.all(np.isfinite(action))
     assert np.max(np.abs(action)) <= env.force_limit
+
+
+def test_residual_gate_and_deviation_reward_smoke():
+    c = load_config(ROOT / "configs" / "mujoco_full_car_residual.yaml")
+    c["episode_seconds"] = 0.05
+    c["mujoco"]["settle_seconds"] = 0.2
+    c["domain_randomization"]["enabled"] = False
+    c["reward"]["deviation"] = 1.0
+    env = MuJoCoFullCarEnv(c, scenario=c["scenarios"][0], use_preview=True, width=160, height=90)
+    obs, info = env.reset(seed=12)
+    cfg = c["residual_control"]
+    gate_nominal = residual_gate(info, cfg)
+    noisy_info = dict(info)
+    noisy_info["preview_error"] = {
+        "delay_steps": 3,
+        "height_noise_std": 0.02,
+        "bias_std": 0.01,
+        "dropout_prob": 0.2,
+        "scale_error_std": 0.2,
+    }
+    gate_noisy = residual_gate(noisy_info, cfg)
+    prior = np.zeros(env.action_space.shape, dtype=np.float32)
+    action = np.full(env.action_space.shape, 100.0, dtype=np.float32)
+    _, reward, _, _, info = env.step({"action": action, "prior_action": prior})
+    env.close()
+    assert gate_noisy < gate_nominal
+    assert np.allclose(info["prior_action"], prior)
+    assert info["action_metrics"]["deviation_rms"] > 0.0
+    assert info["reward_components"]["deviation"] > 0.0
+    assert np.isfinite(reward)
+
+
+def test_collect_expert_dataset_and_ppo_bc_smoke(tmp_path):
+    cfg_path = ROOT / "configs" / "mujoco_full_car_residual.yaml"
+    out_path = tmp_path / "expert.npz"
+    manifest = collect_expert_dataset(
+        config_path=cfg_path,
+        out_path=out_path,
+        expert="FULL_CAR_MPC_LITE",
+        residual_prior="FULL_CAR_MPC_LITE",
+        episodes=1,
+        max_steps=3,
+        seed=21,
+    )
+    assert out_path.is_file()
+    assert Path(str(out_path).replace(".npz", ".manifest.json")).is_file()
+    assert manifest["transitions"] == 3
+    data = np.load(out_path, allow_pickle=True)
+    assert data["obs"].shape[0] == 3
+    assert data["act"].shape == data["residual_act"].shape
+    assert np.max(np.abs(data["residual_act"])) < 1e-5
+
+    c = load_config(cfg_path)
+    c["episode_seconds"] = 0.05
+    c["mujoco"]["settle_seconds"] = 0.2
+    c["domain_randomization"]["enabled"] = False
+    c["imitation"] = {
+        "enabled": True,
+        "dataset": str(out_path),
+        "epochs": 1,
+        "batch_size": 2,
+        "residual_targets": True,
+    }
+    agent = PPOAgent(PPOConfig.from_project_config(c), torch.device("cpu"))
+    losses = pretrain_ppo_from_imitation(agent, c, tmp_path)
+    assert len(losses) == 1
+    assert np.isfinite(losses[0])
+    assert (tmp_path / "imitation_pretrain.json").is_file()
+
+
+def test_si_rppo_ablation_dry_run_writes_variants(tmp_path):
+    manifest = run_si_rppo_ablation(
+        base_config_path=ROOT / "configs" / "mujoco_full_car_safe_ppo.yaml",
+        out_dir=tmp_path / "ablation",
+        episodes=1,
+        expert_episodes=1,
+        expert_max_steps=2,
+        train_scenario_limit=1,
+        eval_scenario_limit=1,
+        episode_seconds=0.05,
+        mujoco_settle_seconds=0.2,
+        dry_run=True,
+    )
+    assert manifest["dry_run"]
+    assert Path(manifest["materialized_base_config"]).is_file()
+    materialized = load_config(Path(manifest["materialized_base_config"]))
+    assert materialized["episode_seconds"] == 0.05
+    assert materialized["mujoco"]["settle_seconds"] == 0.2
+    assert len(materialized["scenarios"]) == 1
+    assert manifest["expert_manifest"]["planned"]
+    assert set(manifest["variants"]) == {
+        "ppo_scratch",
+        "bc_ppo",
+        "residual_bc_ppo",
+        "safe_residual_bc_ppo",
+    }
+    for report in manifest["variants"].values():
+        config_path = Path(report["config"])
+        assert config_path.is_file()
+        assert report["planned_train_command"]
+    assert Path(manifest["combined_metrics"]).is_file()
+    assert manifest["claim_report"]["status"] == "missing_data"
+    assert Path(manifest["claim_report"]["json"]).is_file()
+    assert Path(manifest["claim_report"]["markdown"]).is_file()
+
+
+def test_si_rppo_claim_report_detects_supported_ablation(tmp_path):
+    rows = [
+        {
+            "Variant": "ppo_scratch",
+            "Controller": "PPO",
+            "Scenario": "road_a",
+            "EpisodeReturn": -100.0,
+            "UnsafeSteps": 2,
+            "ActuatorSaturationRatio": 0.2,
+            "ActionDeltaRMS_N": 50.0,
+            "BodyAccRMS_mps2": 1.2,
+            "PitchAccRMS_radps2": 0.3,
+            "RollAccRMS_radps2": 0.4,
+            "ActionDeviationRMS_N": 20.0,
+        },
+        {
+            "Variant": "bc_ppo",
+            "Controller": "PPO",
+            "Scenario": "road_a",
+            "EpisodeReturn": -80.0,
+            "UnsafeSteps": 1,
+            "ActuatorSaturationRatio": 0.1,
+            "ActionDeltaRMS_N": 40.0,
+            "BodyAccRMS_mps2": 1.0,
+            "PitchAccRMS_radps2": 0.25,
+            "RollAccRMS_radps2": 0.35,
+            "ActionDeviationRMS_N": 18.0,
+        },
+        {
+            "Variant": "residual_bc_ppo",
+            "Controller": "PPO",
+            "Scenario": "road_a",
+            "EpisodeReturn": -70.0,
+            "UnsafeSteps": 1,
+            "ActuatorSaturationRatio": 0.1,
+            "ActionDeltaRMS_N": 42.0,
+            "BodyAccRMS_mps2": 0.9,
+            "PitchAccRMS_radps2": 0.22,
+            "RollAccRMS_radps2": 0.32,
+            "ActionDeviationRMS_N": 16.0,
+        },
+        {
+            "Variant": "safe_residual_bc_ppo",
+            "Controller": "PPO",
+            "Scenario": "road_a",
+            "EpisodeReturn": -68.0,
+            "UnsafeSteps": 0,
+            "ActuatorSaturationRatio": 0.02,
+            "ActionDeltaRMS_N": 30.0,
+            "BodyAccRMS_mps2": 0.92,
+            "PitchAccRMS_radps2": 0.23,
+            "RollAccRMS_radps2": 0.33,
+            "ActionDeviationRMS_N": 8.0,
+        },
+    ]
+    report = build_claim_report(pd.DataFrame(rows), tmp_path)
+    assert report["status"] == "ready"
+    statuses = {item["name"]: item["status"] for item in report["comparisons"]}
+    assert statuses["imitation_initialization"] == "supported"
+    assert statuses["residual_prior_structure"] == "supported"
+    assert statuses["safe_residual_gate"] == "supported"
+    assert Path(report["json_path"]).is_file()
+    assert Path(report["markdown_path"]).is_file()
 
 
 def test_preflight_mujoco_training_smoke(tmp_path):

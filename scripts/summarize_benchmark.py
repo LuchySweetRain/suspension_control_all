@@ -17,6 +17,7 @@ PRIMARY_METRICS = [
     "CommandDeltaRMS_N",
     "ActuatorTrackingRMS_N",
     "ActuatorSaturationRatio",
+    "ActionDeviationRMS_N",
     "UnsafeSteps",
     "EpisodeReturn",
 ]

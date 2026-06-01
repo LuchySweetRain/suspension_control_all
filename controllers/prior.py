@@ -47,3 +47,45 @@ def compute_prior_action(controller, env, obs: np.ndarray, info: dict) -> np.nda
     action = controller.compute_action(obs, info)
     return adapt_action_to_env(action, env)
 
+
+def residual_gate(info: dict, cfg: dict) -> float:
+    gate_cfg = dict(cfg.get("gate", {}))
+    base = float(cfg.get("scale", 1.0))
+    if not gate_cfg.get("enabled", False):
+        return base
+    preview_error = dict(info.get("preview_error", {}))
+    delay = float(preview_error.get("delay_steps", 0.0))
+    noise = float(preview_error.get("height_noise_std", 0.0))
+    bias = float(preview_error.get("bias_std", 0.0))
+    dropout = float(preview_error.get("dropout_prob", 0.0))
+    scale_error = float(preview_error.get("scale_error_std", 0.0))
+    preview_penalty = (
+        float(gate_cfg.get("delay_weight", 0.05)) * delay
+        + float(gate_cfg.get("noise_weight", 80.0)) * noise
+        + float(gate_cfg.get("bias_weight", 50.0)) * bias
+        + float(gate_cfg.get("dropout_weight", 1.0)) * dropout
+        + float(gate_cfg.get("scale_error_weight", 1.0)) * scale_error
+    )
+    preview_confidence = float(np.exp(-max(0.0, preview_penalty)))
+
+    safety = dict(info.get("safety", {}))
+    limits = dict(safety.get("limits", {}))
+    margins = []
+    for value_key, limit_key in (
+        ("max_abs_suspension_travel", "max_suspension_travel"),
+        ("abs_pitch", "max_pitch"),
+        ("abs_roll", "max_roll"),
+        ("max_abs_wheel_displacement", "max_wheel_displacement"),
+    ):
+        limit = float(limits.get(limit_key, 0.0))
+        if limit > 0.0:
+            value = float(safety.get(value_key, 0.0))
+            margins.append(np.clip((limit - value) / limit, 0.0, 1.0))
+    safety_margin = float(min(margins)) if margins else 1.0
+    if bool(safety.get("unsafe", False)):
+        safety_margin = 0.0
+
+    min_scale = float(gate_cfg.get("min_scale", 0.0))
+    max_scale = float(gate_cfg.get("max_scale", base))
+    gated = base * preview_confidence * safety_margin
+    return float(np.clip(gated, min_scale, max_scale))
