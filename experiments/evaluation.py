@@ -12,6 +12,7 @@ from controllers.prior import (
     adapt_action_to_env,
     compute_prior_action,
     make_prior_controller,
+    parameterize_policy_action,
     residual_gate,
     shield_policy_action,
     shield_residual_action,
@@ -76,10 +77,11 @@ class ResidualController:
 
 
 class PolicySafetyController:
-    def __init__(self, controller, env, cfg: dict):
+    def __init__(self, controller, env, cfg: dict, action_parameterization_cfg: dict | None = None):
         self.controller = controller
         self.env = env
         self.cfg = dict(cfg)
+        self.action_parameterization_cfg = dict(action_parameterization_cfg or {})
         self.has_prior_action = bool(getattr(controller, "has_prior_action", False))
         self.last_raw_action = np.zeros(env.action_space.shape, dtype=np.float32)
         self.last_projected_action = np.zeros(env.action_space.shape, dtype=np.float32)
@@ -95,8 +97,9 @@ class PolicySafetyController:
 
     def compute_action(self, obs, info):
         action = self.controller.compute_action(obs, info)
-        projected = shield_policy_action(action, self.env, info, self.cfg)
-        self.last_raw_action = adapt_action_to_env(action, self.env)
+        parameterized = parameterize_policy_action(action, self.env, info, self.action_parameterization_cfg)
+        projected = shield_policy_action(parameterized, self.env, info, self.cfg)
+        self.last_raw_action = adapt_action_to_env(parameterized, self.env)
         self.last_projected_action = adapt_action_to_env(projected, self.env)
         delta = self.last_projected_action - self.last_raw_action
         force_limit = max(float(getattr(self.env, "force_limit", 1.0)), 1e-6)
@@ -150,8 +153,11 @@ def make_controller(
         else:
             controller = rl
         policy_safety_cfg = dict(config.get("policy_safety", {}))
+        action_param_cfg = dict(config.get("policy_action_parameterization", {}))
         if policy_safety_cfg:
-            return PolicySafetyController(controller, env, policy_safety_cfg)
+            if residual_cfg.get("enabled", False):
+                action_param_cfg = {}
+            return PolicySafetyController(controller, env, policy_safety_cfg, action_param_cfg)
         return controller
     raise ValueError(f"Unknown controller: {name}")
 

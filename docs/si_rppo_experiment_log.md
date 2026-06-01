@@ -354,3 +354,48 @@ Next algorithm correction:
 - Replace scalar action outputs with a projection-aware action parameterization, e.g. train PPO to output a feasible action increment or a safety-layer preconditioned action rather than an unconstrained raw force.
 - Alternatively, make the feasibility gate state-dependent: apply it only after unsafe rate is below target, or gate only unsafe-positive samples instead of all projection/action-delta violations.
 - The current publishable novelty candidate is now: **adaptive constraint-regularized offline-to-online PPO**, with seed 44 serving as the hard-case evidence that motivates projection-aware policy parameterization.
+
+## 2026-06-01: Delta-Parameterized Projection-Aware PPO
+
+Algorithm change:
+
+- Added `policy_action_parameterization`, a configurable layer that interprets direct PPO actor output as a bounded increment from the previous executed action.
+- The parameterization is applied before the hard safety projection during PPO training and learned-policy evaluation.
+- `ppo_scratch` keeps the layer disabled, so the baseline remains standard raw-force PPO under the same downstream safety layer.
+- `bc_ppo` enables the delta parameterization; residual branches keep it disabled so residual-prior conclusions stay separate.
+
+Mechanism:
+
+```text
+u_pre,t = clip(
+    u_executed,t-1
+  + max_delta_fraction * force_limit * tanh_like_actor_output_t,
+    +/- max_action_fraction * force_limit
+)
+u_executed,t = Projection_U(u_pre,t)
+```
+
+This directly attacks the failure observed in adaptive-constraint PPO: scalar penalties could increase `lambda_proj`, but the actor could still generate raw actions far outside the feasible actuator-rate manifold. Delta parameterization makes the actor's action space itself closer to the executed-control manifold.
+
+Commands:
+
+```text
+python scripts/run_projection_seed_sweep.py --config configs/mujoco_full_car_safe_ppo.yaml --out results/projection_seed42_e20_delta_parameterized --seeds 42 --episodes 20 --expert-episodes 20
+python scripts/run_projection_seed_sweep.py --config configs/mujoco_full_car_safe_ppo.yaml --out results/projection_seed43_e20_delta_parameterized --seeds 43 --episodes 20 --expert-episodes 20
+python scripts/run_projection_seed_sweep.py --config configs/mujoco_full_car_safe_ppo.yaml --out results/projection_seed44_e20_delta_parameterized --seeds 44 --episodes 20 --expert-episodes 20
+```
+
+Core PPO repeated-seed result:
+
+| Seed | CoreStatus | ReturnDelta | UnsafeDelta | BodyDelta | PitchDelta | RollDelta | ActionDeltaDelta | TrackingDelta | ProjectionErrorDelta |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 42 | supported | 2303.4808 | -12.2 | 0.7717 | -1.9244 | -2.0401 | -106.1663 | -158.4140 | -0.4647 |
+| 43 | supported | 8329.6916 | -48.4 | -0.9999 | -2.1375 | -3.1602 | -77.6082 | -115.8016 | -0.4190 |
+| 44 | supported | 8353.1791 | -109.0 | -1.2809 | -0.0299 | -0.2015 | -27.6047 | -41.1899 | -0.3065 |
+
+Interpretation:
+
+- The core claim is now supported on seeds 42, 43, and 44 under the e20 repeated-seed protocol.
+- Seed 44, previously the hard counterexample, is repaired: unsafe steps drop from `114.0` to `5.0`, action delta from `95.5528` to `67.9480`, tracking from `142.5772` to `101.3873`, and projection error from `0.3261` to `0.0196`.
+- Seed 42 still has a body-acceleration tradeoff (`+0.7717` RMS), so the publishable claim should not say every comfort metric improves on every seed. The defensible claim is that the method robustly improves return, safety, pitch/roll comfort, actuator smoothness, tracking, and projection reliance, with body acceleration requiring a comfort-weight ablation.
+- This is the strongest current CCFA-level algorithm thread: **safety-curated offline imitation + adaptive constraint PPO + delta-parameterized projection-aware action space**.

@@ -602,4 +602,7 @@ Implementation status:
 - Done: adaptive Lagrangian-style constraint weights are implemented and logged per episode.
 - Current evidence: adaptive constraints improve seed 44 return and unsafe steps, but pitch, action smoothness, tracking, and projection error remain weak.
 - Negative ablation: feasibility-gated positive advantages were too conservative and collapsed seed 44 toward passive actions; this option is implemented but disabled in the default config.
-- Next: move beyond scalar penalties toward a projection-aware action parameterization or state-dependent feasibility gate, then re-run `run_projection_seed_sweep.py` with `--seeds 42,43,44 --episodes 20` and require all seeds to support `projection_aware_imitation` before claiming robust superiority.
+- Done: delta-parameterized projection-aware actions reinterpret direct PPO output as a bounded increment from the previous executed action before safety projection.
+- Current evidence: the delta-parameterized method supports `projection_aware_imitation` on seeds 42, 43, and 44 at e20. It repairs the previous seed 44 hard failure and sharply reduces projection error.
+- Remaining weakness: seed 42 worsens body acceleration, so the next paper-strengthening ablation should tune comfort/action tradeoffs or add adaptive comfort constraints.
+- Next: run the full matrix with TD3/SAC and residual branches under the updated direct PPO method, then add a compact table for the 3-seed e20 direct-PPO claim.

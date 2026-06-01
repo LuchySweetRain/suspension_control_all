@@ -146,3 +146,41 @@ def shield_policy_action(action: np.ndarray, env, info: dict, cfg: dict) -> np.n
     elif soft_margin > hard_margin and margin < soft_margin:
         filtered *= (margin - hard_margin) / max(soft_margin - hard_margin, 1e-6)
     return filtered.astype(np.float32)
+
+
+def parameterize_policy_action(action: np.ndarray, env, info: dict, cfg: dict) -> np.ndarray:
+    param_cfg = dict(cfg or {})
+    raw = adapt_action_to_env(action, env).astype(np.float64)
+    if not param_cfg.get("enabled", False):
+        return raw.astype(np.float32)
+
+    mode = str(param_cfg.get("mode", "delta")).lower()
+    force_limit = float(getattr(env, "force_limit", np.inf))
+    previous_action = getattr(env, "last_action", None)
+    if previous_action is None:
+        previous = np.zeros_like(raw, dtype=np.float64)
+    else:
+        previous = adapt_action_to_env(previous_action, env).astype(np.float64)
+
+    if mode in {"delta", "increment", "rate"}:
+        if not np.isfinite(force_limit):
+            return raw.astype(np.float32)
+        max_delta_fraction = float(param_cfg.get("max_delta_fraction", 0.08))
+        normalized_delta = np.clip(raw / max(force_limit, 1e-6), -1.0, 1.0)
+        delta = normalized_delta * max(0.0, max_delta_fraction) * force_limit
+        if param_cfg.get("safety_margin_scale", False):
+            margin = safety_margin(info)
+            min_scale = float(param_cfg.get("min_margin_scale", 0.0))
+            power = float(param_cfg.get("safety_margin_power", 1.0))
+            scale = min_scale + (1.0 - min_scale) * (float(np.clip(margin, 0.0, 1.0)) ** power)
+            delta *= scale
+        action_out = previous + delta
+    elif mode in {"raw", "absolute"}:
+        action_out = raw
+    else:
+        raise ValueError("policy_action_parameterization.mode must be one of: delta, raw")
+
+    max_fraction = float(param_cfg.get("max_action_fraction", 1.0))
+    if np.isfinite(force_limit) and max_fraction > 0.0:
+        action_out = np.clip(action_out, -max_fraction * force_limit, max_fraction * force_limit)
+    return np.clip(action_out, env.action_space.low, env.action_space.high).astype(np.float32)

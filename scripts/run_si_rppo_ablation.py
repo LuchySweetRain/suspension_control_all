@@ -24,6 +24,7 @@ from scripts.summarize_benchmark import build_report
 VARIANTS = {
     "ppo_scratch": {
         "residual_control": {"enabled": False},
+        "policy_action_parameterization": {"enabled": False},
         "imitation": {"enabled": False},
         "evaluation": {"controllers": ["PASSIVE", "FULL_CAR_MPC_LITE"]},
         "rl": {
@@ -39,18 +40,21 @@ VARIANTS = {
     },
     "bc_ppo": {
         "residual_control": {"enabled": False},
+        "policy_action_parameterization": {"enabled": True},
         "imitation": {"enabled": True, "residual_targets": False, "anchor_enabled": True},
         "evaluation": {"controllers": ["PASSIVE", "FULL_CAR_MPC_LITE"]},
         "reward": {"deviation": 0.0},
     },
     "residual_bc_ppo": {
         "residual_control": {"enabled": True, "gate": {"enabled": False}, "shield": {"enabled": False}},
+        "policy_action_parameterization": {"enabled": False},
         "imitation": {"enabled": True, "residual_targets": True, "anchor_enabled": False},
         "evaluation": {"controllers": ["PASSIVE", "FULL_CAR_MPC_LITE"]},
         "reward": {"deviation": 0.0},
     },
     "safe_residual_bc_ppo": {
         "residual_control": {"enabled": True, "gate": {"enabled": True}},
+        "policy_action_parameterization": {"enabled": False},
         "imitation": {"enabled": True, "residual_targets": True, "anchor_enabled": False},
         "evaluation": {"controllers": ["PASSIVE", "FULL_CAR_MPC_LITE"]},
     },

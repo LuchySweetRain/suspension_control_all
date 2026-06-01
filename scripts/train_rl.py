@@ -21,6 +21,7 @@ from controllers.prior import (
     adapt_action_to_env,
     compute_prior_action,
     make_prior_controller,
+    parameterize_policy_action,
     residual_gate,
     shield_policy_action,
     shield_residual_action,
@@ -386,6 +387,7 @@ def train_ppo(agent: PPOAgent, config: dict, run_dir: Path, episodes: int):
     residual_enabled = bool(residual_cfg.get("enabled", False))
     imitation_cfg = dict(config.get("imitation", {}))
     policy_safety_cfg = dict(config.get("policy_safety", {}))
+    action_param_cfg = dict(config.get("policy_action_parameterization", {}))
     pbar = trange(episodes, desc="PPO")
     for episode in pbar:
         scenario = scenario_sampler.select(episode)
@@ -422,6 +424,7 @@ def train_ppo(agent: PPOAgent, config: dict, run_dir: Path, episodes: int):
             else:
                 action = residual_action
                 prior_action = None
+                action = parameterize_policy_action(action, env, info, action_param_cfg)
             raw_policy_action = np.asarray(action, dtype=np.float32).copy()
             action = shield_policy_action(action, env, info, policy_safety_cfg)
             projection_error = float(
