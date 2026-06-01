@@ -473,7 +473,9 @@ Implemented in the current worktree:
 - SI-RPPO ablation runner that materializes variant configs, collects expert data, trains PPO variants, evaluates them, and writes a combined metrics table.
 - SI-RPPO claim report that checks whether imitation initialization, residual structure, safety gating, and optional TD3/SAC off-policy comparisons are supported by measured metrics.
 
-The next required evidence is an ablation table comparing:
+Current evidence is tracked in `docs/si_rppo_experiment_log.md`.
+
+The 2026-06-01 `episodes=20` full-scenario matrix supports the residual prior structure, but it does not yet support the full SI-RPPO claim. Direct BC-PPO degraded performance relative to PPO from scratch, safe residual gating introduced a small unsafe count, and SAC is still a strong baseline. The next required evidence is an improved ablation table comparing:
 
 - PPO from scratch,
 - BC-only PPO,
@@ -506,3 +508,13 @@ si_rppo_claim_report.md
 ```
 
 The claim report is a gate for paper evidence, not a substitute for analysis. A result should be treated as publishable only when the report supports all three SI-RPPO comparisons and the full benchmark table also shows no unacceptable degradation in comfort, suspension travel, tire-load variation, or actuator feasibility.
+
+## Next Algorithm Revision
+
+The next implementation pass should focus on:
+
+- BC-only checkpoint evaluation before PPO fine-tuning.
+- Early PPO anchoring to the imitation policy or expert action, using a decaying BC/KL penalty.
+- A stronger safety gate with a suspension-margin deadband and residual scale schedule.
+- A hard residual safety shield that shrinks the learned residual near suspension, pitch, roll, or wheel-displacement limits.
+- Re-running the `episodes=20` matrix with TD3/SAC baselines after these changes.

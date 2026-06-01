@@ -16,6 +16,7 @@ Research direction:
 
 - The current thesis-oriented algorithm plan focuses on offline imitation initialization followed by online safe residual PPO for full-car active suspension control. See `docs/offline_imitation_online_ppo_plan.md`.
 - The SI-RPPO ablation entry point is `scripts/run_si_rppo_ablation.py`, covering PPO from scratch, BC-PPO, residual BC-PPO, and safe residual BC-PPO.
+- Current SI-RPPO experiment results and interpretation are logged in `docs/si_rppo_experiment_log.md`.
 
 Environments:
 

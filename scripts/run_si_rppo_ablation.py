@@ -73,6 +73,16 @@ LOWER_IS_BETTER = {
 }
 
 
+def _claim_status(metrics: dict, required_improvements: list[str], max_worsened_metrics: int = 0) -> tuple[str, list[str], list[str], list[str]]:
+    improved = [m for m, data in metrics.items() if data["improved"] is True]
+    worsened = [m for m, data in metrics.items() if data["improved"] is False]
+    critical = [m for m in ("UnsafeSteps", "ActuatorSaturationRatio") if m in worsened]
+    missing_required = [m for m in required_improvements if metrics.get(m, {}).get("improved") is not True]
+    supported = not critical and not missing_required and len(worsened) <= max_worsened_metrics
+    status = "supported" if supported else "weak_or_contradicted"
+    return status, improved, worsened, critical
+
+
 def _write_config(config: dict, path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
@@ -155,6 +165,8 @@ def build_claim_report(combined: pd.DataFrame, out_dir: Path) -> dict:
             "baseline": "ppo_scratch",
             "claim": "Offline behavior cloning should improve early PPO performance over random initialization.",
             "required_metrics": ["EpisodeReturn", "UnsafeSteps", "ActuatorSaturationRatio", "ActionDeltaRMS_N"],
+            "required_improvements": ["EpisodeReturn", "ActionDeltaRMS_N"],
+            "max_worsened_metrics": 0,
         },
         {
             "name": "residual_prior_structure",
@@ -162,6 +174,8 @@ def build_claim_report(combined: pd.DataFrame, out_dir: Path) -> dict:
             "baseline": "bc_ppo",
             "claim": "Residual learning around the full-car prior should improve control quality over direct BC-PPO.",
             "required_metrics": ["EpisodeReturn", "BodyAccRMS_mps2", "PitchAccRMS_radps2", "RollAccRMS_radps2", "UnsafeSteps"],
+            "required_improvements": ["EpisodeReturn"],
+            "max_worsened_metrics": 1,
         },
         {
             "name": "safe_residual_gate",
@@ -169,6 +183,8 @@ def build_claim_report(combined: pd.DataFrame, out_dir: Path) -> dict:
             "baseline": "residual_bc_ppo",
             "claim": "Preview/safety-aware residual gating and deviation regularization should reduce unsafe or infeasible residual actions.",
             "required_metrics": ["UnsafeSteps", "ActuatorSaturationRatio", "ActionDeltaRMS_N", "ActionDeviationRMS_N", "EpisodeReturn"],
+            "required_improvements": ["ActionDeltaRMS_N", "ActionDeviationRMS_N"],
+            "max_worsened_metrics": 0,
         },
     ]
     if combined.empty or "Variant" not in combined.columns or "Controller" not in combined.columns:
@@ -202,10 +218,11 @@ def build_claim_report(combined: pd.DataFrame, out_dir: Path) -> dict:
             required = [m for m in item["required_metrics"] if m in grouped.columns]
             for metric in required:
                 metrics[metric] = _metric_delta(metric, metric_value(candidate, "PPO", metric), metric_value(baseline, "PPO", metric))
-            improved = [m for m, data in metrics.items() if data["improved"] is True]
-            worsened = [m for m, data in metrics.items() if data["improved"] is False]
-            critical = [m for m in ("UnsafeSteps", "ActuatorSaturationRatio") if m in worsened]
-            status = "supported" if improved and not critical else "weak_or_contradicted"
+            status, improved, worsened, critical = _claim_status(
+                metrics,
+                list(item.get("required_improvements", [])),
+                int(item.get("max_worsened_metrics", 0)),
+            )
             comparison_results.append(
                 {
                     **item,
@@ -232,6 +249,8 @@ def build_claim_report(combined: pd.DataFrame, out_dir: Path) -> dict:
                     "ActionDeltaRMS_N",
                     "ActuatorSaturationRatio",
                 ],
+                "required_improvements": ["EpisodeReturn", "UnsafeSteps", "ActuatorSaturationRatio"],
+                "max_worsened_metrics": 2,
             }
             if not has_row("safe_residual_bc_ppo", "PPO") or not has_row(baseline_variant, algorithm):
                 missing = []
@@ -249,10 +268,11 @@ def build_claim_report(combined: pd.DataFrame, out_dir: Path) -> dict:
                     metric_value("safe_residual_bc_ppo", "PPO", metric),
                     metric_value(baseline_variant, algorithm, metric),
                 )
-            improved = [m for m, data in metrics.items() if data["improved"] is True]
-            worsened = [m for m, data in metrics.items() if data["improved"] is False]
-            critical = [m for m in ("UnsafeSteps", "ActuatorSaturationRatio") if m in worsened]
-            status = "supported" if improved and not critical else "weak_or_contradicted"
+            status, improved, worsened, critical = _claim_status(
+                metrics,
+                list(item.get("required_improvements", [])),
+                int(item.get("max_worsened_metrics", 0)),
+            )
             comparison_results.append(
                 {
                     **item,
