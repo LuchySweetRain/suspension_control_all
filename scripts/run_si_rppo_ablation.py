@@ -271,6 +271,56 @@ def build_claim_report(combined: pd.DataFrame, out_dir: Path) -> dict:
             )
         for algorithm in ("td3", "sac"):
             baseline_variant = f"{algorithm}_baseline"
+            direct_item = {
+                "name": f"projection_aware_ppo_vs_{algorithm}",
+                "candidate": "bc_ppo",
+                "baseline": baseline_variant,
+                "claim": f"Delta-parameterized projection-aware BC-PPO should be competitive with the off-policy {algorithm.upper()} baseline.",
+                "required_metrics": [
+                    "EpisodeReturn",
+                    "UnsafeSteps",
+                    "BodyAccRMS_mps2",
+                    "PitchAccRMS_radps2",
+                    "RollAccRMS_radps2",
+                    "ActionDeltaRMS_N",
+                    "ActuatorTrackingRMS_N",
+                    "ActuatorSaturationRatio",
+                    "PolicyProjectionError",
+                ],
+                "required_improvements": ["EpisodeReturn", "UnsafeSteps", "ActionDeltaRMS_N"],
+                "max_worsened_metrics": 2,
+            }
+            if not has_row("bc_ppo", "PPO") or not has_row(baseline_variant, algorithm):
+                missing = []
+                if not has_row("bc_ppo", "PPO"):
+                    missing.append("bc_ppo/PPO")
+                if not has_row(baseline_variant, algorithm):
+                    missing.append(f"{baseline_variant}/{algorithm.upper()}")
+                comparison_results.append({**direct_item, "status": "missing_variant", "missing": missing, "metrics": {}})
+            else:
+                metrics = {}
+                required = [m for m in direct_item["required_metrics"] if m in grouped.columns]
+                for metric in required:
+                    metrics[metric] = _metric_delta(
+                        metric,
+                        metric_value("bc_ppo", "PPO", metric),
+                        metric_value(baseline_variant, algorithm, metric),
+                    )
+                status, improved, worsened, critical = _claim_status(
+                    metrics,
+                    list(direct_item.get("required_improvements", [])),
+                    int(direct_item.get("max_worsened_metrics", 0)),
+                )
+                comparison_results.append(
+                    {
+                        **direct_item,
+                        "status": status,
+                        "improved_metrics": improved,
+                        "worsened_metrics": worsened,
+                        "critical_worsened_metrics": critical,
+                        "metrics": metrics,
+                    }
+                )
             item = {
                 "name": f"safe_residual_ppo_vs_{algorithm}",
                 "candidate": "safe_residual_bc_ppo",

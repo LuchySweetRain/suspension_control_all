@@ -19,6 +19,7 @@ from controllers.prior import parameterize_policy_action, residual_gate, shield_
 from envs import HalfCarEnv, MuJoCoFullCarEnv, MuJoCoHalfCarEnv, MuJoCoVehicleEnv
 from experiments.evaluation import evaluate_all, make_controller
 from scripts.benchmark_vector_env import benchmark_vector_env
+from scripts.build_delta_ppo_evidence_table import build_delta_ppo_evidence_table
 from scripts.export_mujoco_env_spec import export_env_spec
 from scripts.generate_road_dataset import generate_dataset
 from scripts.import_road_directory import import_road_directory
@@ -900,7 +901,7 @@ def test_si_rppo_claim_report_detects_supported_ablation(tmp_path):
             "Controller": "TD3",
             "Scenario": "road_a",
             "EpisodeReturn": -90.0,
-            "UnsafeSteps": 1,
+            "UnsafeSteps": 2,
             "ActuatorSaturationRatio": 0.12,
             "ActionDeltaRMS_N": 60.0,
             "BodyAccRMS_mps2": 1.1,
@@ -913,7 +914,7 @@ def test_si_rppo_claim_report_detects_supported_ablation(tmp_path):
             "Controller": "SAC",
             "Scenario": "road_a",
             "EpisodeReturn": -88.0,
-            "UnsafeSteps": 1,
+            "UnsafeSteps": 2,
             "ActuatorSaturationRatio": 0.1,
             "ActionDeltaRMS_N": 55.0,
             "BodyAccRMS_mps2": 1.05,
@@ -929,6 +930,8 @@ def test_si_rppo_claim_report_detects_supported_ablation(tmp_path):
     assert statuses["imitation_initialization"] == "supported"
     assert statuses["residual_prior_structure"] == "supported"
     assert statuses["safe_residual_gate"] == "supported"
+    assert statuses["projection_aware_ppo_vs_td3"] == "supported"
+    assert statuses["projection_aware_ppo_vs_sac"] == "supported"
     assert statuses["safe_residual_ppo_vs_td3"] == "supported"
     assert statuses["safe_residual_ppo_vs_sac"] == "supported"
     assert Path(report["json_path"]).is_file()
@@ -958,6 +961,45 @@ def test_projection_seed_sweep_dry_run(tmp_path):
     for seed in (42, 43):
         assert (tmp_path / "seed_sweep" / f"seed_{seed}" / "seed_config.yaml").is_file()
         assert (tmp_path / "seed_sweep" / f"seed_{seed}" / "ablation" / "si_rppo_ablation_manifest.json").is_file()
+
+
+def test_delta_ppo_evidence_table_builder(tmp_path):
+    seed_dir = tmp_path / "seed_42"
+    seed_dir.mkdir()
+    (seed_dir / "projection_seed_sweep_summary.json").write_text(
+        json.dumps(
+            {
+                "seeds": [
+                    {
+                        "seed": 42,
+                        "core_status": "supported",
+                        "delta_EpisodeReturn": 1.0,
+                        "delta_UnsafeSteps": -1.0,
+                        "delta_BodyAccRMS_mps2": 0.1,
+                        "delta_PitchAccRMS_radps2": -0.2,
+                        "delta_RollAccRMS_radps2": -0.3,
+                        "delta_ActionDeltaRMS_N": -4.0,
+                        "delta_ActuatorTrackingRMS_N": -5.0,
+                        "delta_PolicyProjectionError": -0.6,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    matrix_dir = tmp_path / "matrix"
+    matrix_dir.mkdir()
+    pd.DataFrame(
+        [
+            {"Variant": "ppo_scratch", "Controller": "PPO", "EpisodeReturn": -2.0, "UnsafeSteps": 1},
+            {"Variant": "bc_ppo", "Controller": "PPO", "EpisodeReturn": -1.0, "UnsafeSteps": 0},
+        ]
+    ).to_csv(matrix_dir / "combined_metrics.csv", index=False)
+    summary = build_delta_ppo_evidence_table([seed_dir], matrix_dir, tmp_path / "evidence")
+    assert summary["supported_seeds"] == 1
+    assert Path(summary["seed_csv"]).is_file()
+    assert Path(summary["matrix_csv"]).is_file()
+    assert Path(summary["markdown"]).is_file()
 
 
 def test_preflight_mujoco_training_smoke(tmp_path):

@@ -605,4 +605,7 @@ Implementation status:
 - Done: delta-parameterized projection-aware actions reinterpret direct PPO output as a bounded increment from the previous executed action before safety projection.
 - Current evidence: the delta-parameterized method supports `projection_aware_imitation` on seeds 42, 43, and 44 at e20. It repairs the previous seed 44 hard failure and sharply reduces projection error.
 - Remaining weakness: seed 42 worsens body acceleration, so the next paper-strengthening ablation should tune comfort/action tradeoffs or add adaptive comfort constraints.
-- Next: run the full matrix with TD3/SAC and residual branches under the updated direct PPO method, then add a compact table for the 3-seed e20 direct-PPO claim.
+- Done: `results/si_rppo_e20_delta_parameterized_full_matrix` runs the full matrix with TD3/SAC and residual branches under the updated direct PPO method.
+- Done: `scripts/build_delta_ppo_evidence_table.py` generates a compact repeated-seed and full-matrix evidence table in `results/delta_ppo_evidence_table`.
+- Current full-matrix evidence: delta-parameterized BC-PPO beats PPO scratch, but TD3/SAC and passive-like behavior remain stronger under this short-horizon benchmark.
+- Next: add a safe-teacher improvement gate or passive-deviation confidence mechanism so active force is applied only when it is expected to improve comfort/safety over the safe teacher. This is now the main gap before making a broad CCFA-level superiority claim.

@@ -399,3 +399,42 @@ Interpretation:
 - Seed 44, previously the hard counterexample, is repaired: unsafe steps drop from `114.0` to `5.0`, action delta from `95.5528` to `67.9480`, tracking from `142.5772` to `101.3873`, and projection error from `0.3261` to `0.0196`.
 - Seed 42 still has a body-acceleration tradeoff (`+0.7717` RMS), so the publishable claim should not say every comfort metric improves on every seed. The defensible claim is that the method robustly improves return, safety, pitch/roll comfort, actuator smoothness, tracking, and projection reliance, with body acceleration requiring a comfort-weight ablation.
 - This is the strongest current CCFA-level algorithm thread: **safety-curated offline imitation + adaptive constraint PPO + delta-parameterized projection-aware action space**.
+
+## 2026-06-01: Delta-Parameterized Full Matrix
+
+Command:
+
+```text
+python scripts/run_si_rppo_ablation.py --config configs/mujoco_full_car_safe_ppo.yaml --out results/si_rppo_e20_delta_parameterized_full_matrix --episodes 20 --expert-episodes 20 --expert-controller PASSIVE --skip-unsafe-expert --baseline-algorithms td3,sac
+```
+
+Evidence table:
+
+```text
+python scripts/build_delta_ppo_evidence_table.py --seed-dirs results/projection_seed42_e20_delta_parameterized results/projection_seed43_e20_delta_parameterized results/projection_seed44_e20_delta_parameterized --full-matrix-dir results/si_rppo_e20_delta_parameterized_full_matrix --out results/delta_ppo_evidence_table
+```
+
+Report status:
+
+- Overall claim report: `ready`.
+- Core PPO claim: `supported`.
+- Direct delta-parameterized BC-PPO vs TD3/SAC: `weak_or_contradicted`.
+- Residual-prior and safe-residual claims: still weak.
+
+Mean full-matrix learned-controller metrics:
+
+| Variant | Controller | Return | Unsafe | Body | Pitch | Roll | ActionDelta | Tracking | ProjectionError |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| ppo_scratch | PPO | -9962.1158 | 21.0 | 2.4933 | 5.2429 | 3.8918 | 169.1610 | 252.4103 | 0.4804 |
+| bc_ppo | PPO | -7658.6350 | 8.8 | 3.2650 | 3.3185 | 1.8518 | 62.9946 | 93.9962 | 0.0157 |
+| residual_bc_ppo | PPO | -7776.8564 | 2.0 | 3.5037 | 3.8325 | 0.5596 | 144.3384 | 215.3717 | 0.3141 |
+| safe_residual_bc_ppo | PPO | -12061.8027 | 10.0 | 4.3393 | 5.2741 | 0.1044 | 133.5292 | 199.2430 | 0.3331 |
+| td3_baseline | TD3 | -3337.5338 | 0.0 | 0.4369 | 2.7373 | 0.2017 | 1.0743 | 1.6031 | 0.0001 |
+| sac_baseline | SAC | -3064.9345 | 0.0 | 0.4208 | 2.7443 | 0.0174 | 0.0764 | 0.1139 | 0.0000 |
+
+Interpretation:
+
+- Delta-parameterized BC-PPO is now a strong improvement over standard PPO scratch in the full matrix: return, unsafe steps, pitch/roll comfort, action smoothness, actuator tracking, and projection error all improve.
+- The method still does not beat TD3/SAC or passive-like behavior in this short-horizon setup. TD3/SAC learn near-passive low-action policies with zero unsafe steps and much lower actuator activity.
+- This means the current paper claim should be framed as an algorithmic fix for unsafe PPO exploration under actuator projection, not yet as a full replacement for off-policy baselines.
+- The next CCFA-strengthening algorithm step is a safe-teacher improvement gate: the learned controller should deviate from passive only when the policy has evidence that active force improves comfort/safety. This targets the remaining gap to passive/SAC without discarding the successful delta-parameterized PPO mechanism.
