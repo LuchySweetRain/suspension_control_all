@@ -44,8 +44,25 @@ Interpretation:
 
 Next algorithm actions:
 
-1. Add a BC-only evaluation checkpoint before PPO fine-tuning to separate imitation quality from online PPO degradation.
-2. Add KL/behavior-cloning anchoring during early PPO updates so direct BC-PPO cannot drift aggressively away from the expert.
-3. Strengthen safe residual gating with a suspension-margin deadband and residual scale schedule.
-4. Add a hard residual safety shield that shrinks `delta_u_ppo` when current suspension or roll/pitch margins are near limits.
+1. Add a BC-only evaluation checkpoint before PPO fine-tuning to separate imitation quality from online PPO degradation. Done.
+2. Add behavior-cloning anchoring during early PPO updates so direct BC-PPO cannot drift aggressively away from the expert. Done.
+3. Strengthen safe residual gating with a suspension-margin deadband and residual scale schedule. Done.
+4. Add a hard residual safety shield that shrinks `delta_u_ppo` when current suspension or roll/pitch margins are near limits. Done.
 5. Re-run `episodes=20` and require all SI-RPPO claim report rows to be supported before treating the approach as a thesis-grade result.
+
+## 2026-06-01: Anchor + Shield Implementation Smoke
+
+Command:
+
+```text
+python scripts/run_si_rppo_ablation.py --config configs/mujoco_full_car_safe_ppo.yaml --out results/si_rppo_anchor_shield_smoke --episodes 1 --expert-episodes 1 --expert-max-steps 2 --train-scenario-limit 1 --eval-scenario-limit 1 --episode-seconds 0.05 --mujoco-settle-seconds 0.2 --variants safe_residual_bc_ppo
+```
+
+Result:
+
+- Training chain completed.
+- `imitation_pretrained_eval.json` was written for the BC-only checkpoint.
+- PPO `training_history.json` records `bc_anchor_weight`.
+- Safe residual action metrics were reduced in the smoke run, with zero unsafe steps.
+
+This smoke run is not paper evidence. It only verifies that the anchor/shield algorithm path executes before the next `episodes=20` matrix.

@@ -7,6 +7,13 @@ imitation:
   batch_size: 256
   max_steps_per_epoch: null
   residual_targets: true
+  eval_pretrained: true
+  anchor_enabled: true
+  anchor_initial_weight: 0.25
+  anchor_final_weight: 0.02
+  anchor_decay_episodes: 40
+  anchor_batch_size: 256
+  anchor_max_samples: 4096
 
 rl:
   episodes: 200
@@ -19,4 +26,3 @@ rl:
     minibatch_size: 256
     entropy_coef: 0.0005
     value_coef: 0.5
-

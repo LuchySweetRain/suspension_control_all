@@ -8,11 +8,18 @@ residual_control:
     enabled: true
     min_scale: 0.0
     max_scale: 0.5
+    safety_deadband: 0.25
+    safety_power: 2.0
     delay_weight: 0.05
     noise_weight: 80.0
     bias_weight: 50.0
     dropout_weight: 1.0
     scale_error_weight: 1.0
+  shield:
+    enabled: true
+    max_residual_fraction: 0.35
+    hard_margin: 0.15
+    soft_margin: 0.35
 
 imitation:
   enabled: false
@@ -21,6 +28,13 @@ imitation:
   batch_size: 256
   max_steps_per_epoch: null
   residual_targets: true
+  eval_pretrained: true
+  anchor_enabled: true
+  anchor_initial_weight: 0.25
+  anchor_final_weight: 0.02
+  anchor_decay_episodes: 40
+  anchor_batch_size: 256
+  anchor_max_samples: 4096
 
 reward:
   deviation: 0.05

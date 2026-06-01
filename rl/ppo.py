@@ -86,6 +86,8 @@ class PPOAgent:
         self.value = TransformerValue(cfg).to(device)
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=cfg.actor_lr)
         self.value_optimizer = optim.Adam(self.value.parameters(), lr=cfg.critic_lr)
+        self.bc_anchor_obs: torch.Tensor | None = None
+        self.bc_anchor_act: torch.Tensor | None = None
 
     def select_action(self, obs: np.ndarray, noise: float = 0.0) -> np.ndarray:
         obs_t = torch.as_tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
@@ -117,7 +119,11 @@ class PPOAgent:
         entropy = (0.5 + 0.5 * np.log(2 * np.pi) + log_std).sum(dim=-1, keepdim=True)
         return log_prob, entropy
 
-    def train_trajectory(self, trajectory: dict[str, list]) -> tuple[float, float]:
+    def set_bc_anchor(self, obs: np.ndarray, act: np.ndarray):
+        self.bc_anchor_obs = torch.as_tensor(np.asarray(obs), dtype=torch.float32, device=self.device)
+        self.bc_anchor_act = torch.as_tensor(np.asarray(act), dtype=torch.float32, device=self.device)
+
+    def train_trajectory(self, trajectory: dict[str, list], bc_anchor_weight: float = 0.0, bc_anchor_batch_size: int | None = None) -> tuple[float, float]:
         obs = torch.as_tensor(np.asarray(trajectory["obs"]), dtype=torch.float32, device=self.device)
         act = torch.as_tensor(np.asarray(trajectory["act"]), dtype=torch.float32, device=self.device)
         old_logp = torch.as_tensor(np.asarray(trajectory["logp"]), dtype=torch.float32, device=self.device).unsqueeze(1)
@@ -136,6 +142,16 @@ class PPOAgent:
                 clipped = torch.clamp(ratio, 1 - self.cfg.clip_ratio, 1 + self.cfg.clip_ratio) * adv[idx]
                 actor_loss = -(torch.min(ratio * adv[idx], clipped)).mean()
                 actor_loss = actor_loss - self.cfg.entropy_coef * entropy.mean()
+                if bc_anchor_weight > 0.0 and self.bc_anchor_obs is not None and self.bc_anchor_act is not None:
+                    anchor_n = int(self.bc_anchor_obs.shape[0])
+                    anchor_batch = int(bc_anchor_batch_size or idx.shape[0])
+                    anchor_idx = torch.randint(0, anchor_n, (anchor_batch,), device=self.device)
+                    anchor_pred, _ = self.actor.sample(self.bc_anchor_obs[anchor_idx], deterministic=True)
+                    anchor_loss = nn.MSELoss()(
+                        anchor_pred / self.cfg.act_limit,
+                        self.bc_anchor_act[anchor_idx] / self.cfg.act_limit,
+                    )
+                    actor_loss = actor_loss + float(bc_anchor_weight) * anchor_loss
                 self.actor_optimizer.zero_grad()
                 actor_loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.cfg.gradient_clip)

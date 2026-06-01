@@ -15,7 +15,7 @@ if str(ROOT) not in sys.path:
 from config import load_config
 from controllers import MPCController, PIDController, SPDFController
 from controllers.rl_transformer import RLTransformerController
-from controllers.prior import residual_gate
+from controllers.prior import residual_gate, shield_residual_action
 from envs import HalfCarEnv, MuJoCoFullCarEnv, MuJoCoHalfCarEnv, MuJoCoVehicleEnv
 from experiments.evaluation import evaluate_all, make_controller
 from scripts.benchmark_vector_env import benchmark_vector_env
@@ -589,6 +589,10 @@ def test_residual_gate_and_deviation_reward_smoke():
         "scale_error_std": 0.2,
     }
     gate_noisy = residual_gate(noisy_info, cfg)
+    near_limit_info = dict(info)
+    near_limit_info["safety"] = dict(info["safety"])
+    near_limit_info["safety"]["max_abs_suspension_travel"] = 0.99 * near_limit_info["safety"]["limits"]["max_suspension_travel"]
+    shielded = shield_residual_action(np.full(env.action_space.shape, env.force_limit, dtype=np.float32), env, near_limit_info, cfg)
     prior = np.zeros(env.action_space.shape, dtype=np.float32)
     action = np.full(env.action_space.shape, 100.0, dtype=np.float32)
     _, _, _, _, no_prior_info = env.step(action)
@@ -598,6 +602,7 @@ def test_residual_gate_and_deviation_reward_smoke():
     _, reward, _, _, info = env.step({"action": action, "prior_action": prior})
     env.close()
     assert gate_noisy < gate_nominal
+    assert np.max(np.abs(shielded)) < 1e-3
     assert info["has_prior_action"]
     assert np.allclose(info["prior_action"], prior)
     assert info["action_metrics"]["deviation_rms"] > 0.0
@@ -640,7 +645,15 @@ def test_collect_expert_dataset_and_ppo_bc_smoke(tmp_path):
     losses = pretrain_ppo_from_imitation(agent, c, tmp_path)
     assert len(losses) == 1
     assert np.isfinite(losses[0])
+    assert agent.bc_anchor_obs is None
     assert (tmp_path / "imitation_pretrain.json").is_file()
+
+    c["imitation"]["anchor_enabled"] = True
+    c["imitation"]["anchor_max_samples"] = 2
+    anchored = PPOAgent(PPOConfig.from_project_config(c), torch.device("cpu"))
+    pretrain_ppo_from_imitation(anchored, c, tmp_path)
+    assert anchored.bc_anchor_obs is not None
+    assert anchored.bc_anchor_obs.shape[0] == 2
 
 
 def test_si_rppo_ablation_dry_run_writes_variants(tmp_path):

@@ -54,6 +54,7 @@ python scripts/run_si_rppo_ablation.py --config configs/mujoco_full_car_safe_ppo
 ```
 
 The runner writes `combined_metrics.csv`, `si_rppo_claim_report.json`, and `si_rppo_claim_report.md` under the selected result directory.
+PPO imitation runs also write `imitation_pretrained_eval.json` before online fine-tuning when `imitation.eval_pretrained` is enabled.
 
 Include off-policy TD3/SAC baselines in the same evidence report:
 

@@ -511,10 +511,17 @@ The claim report is a gate for paper evidence, not a substitute for analysis. A 
 
 ## Next Algorithm Revision
 
-The next implementation pass should focus on:
+Implemented in the current revision:
 
-- BC-only checkpoint evaluation before PPO fine-tuning.
-- Early PPO anchoring to the imitation policy or expert action, using a decaying BC/KL penalty.
-- A stronger safety gate with a suspension-margin deadband and residual scale schedule.
-- A hard residual safety shield that shrinks the learned residual near suspension, pitch, roll, or wheel-displacement limits.
-- Re-running the `episodes=20` matrix with TD3/SAC baselines after these changes.
+- BC-only checkpoint evaluation before PPO fine-tuning: `imitation_pretrained_eval.json`.
+- Early PPO anchoring to the imitation policy or expert action, using a decaying BC penalty: `imitation.anchor_*`.
+- A stronger safety gate with a suspension-margin deadband and residual scale schedule: `residual_control.gate.safety_deadband` and `safety_power`.
+- A hard residual safety shield that shrinks the learned residual near suspension, pitch, roll, or wheel-displacement limits: `residual_control.shield`.
+
+Next required run:
+
+```text
+python scripts/run_si_rppo_ablation.py --config configs/mujoco_full_car_safe_ppo.yaml --out results/si_rppo_e20_anchor_shield --episodes 20 --expert-episodes 20 --baseline-algorithms td3,sac
+```
+
+The target is to make `safe_residual_gate` supported without sacrificing the already-supported `residual_prior_structure` claim.

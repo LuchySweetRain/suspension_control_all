@@ -17,7 +17,7 @@ if str(ROOT) not in sys.path:
 
 from config import apply_algorithm_overrides, load_config
 from controllers import MPCController, PIDController, SPDFController
-from controllers.prior import adapt_action_to_env, compute_prior_action, make_prior_controller, residual_gate
+from controllers.prior import adapt_action_to_env, compute_prior_action, make_prior_controller, residual_gate, shield_residual_action
 from envs import HalfCarEnv, MuJoCoFullCarEnv, MuJoCoVehicleEnv
 from rl.ddpg import DDPGAgent, DDPGConfig
 from rl.ppo import PPOAgent, PPOConfig, finish_ppo_trajectory
@@ -178,7 +178,7 @@ def evaluate_agent(agent, config: dict) -> dict:
             residual_action = agent.select_action(obs, noise=0.0)
             if residual_enabled:
                 prior_action = compute_prior_action(prior, env, obs, info)
-                residual_action = adapt_action_to_env(residual_action, env)
+                residual_action = shield_residual_action(residual_action, env, info, residual_cfg)
                 scale = residual_gate(info, residual_cfg)
                 action = np.clip(
                     prior_action + scale * residual_action,
@@ -232,6 +232,13 @@ def pretrain_ppo_from_imitation(agent: PPOAgent, config: dict, run_dir: Path) ->
         batch_size=int(imitation_cfg.get("batch_size", config["rl"].get("batch_size", 128))),
         max_steps_per_epoch=imitation_cfg.get("max_steps_per_epoch"),
     )
+    if imitation_cfg.get("anchor_enabled", False) and hasattr(agent, "set_bc_anchor"):
+        max_anchor_samples = imitation_cfg.get("anchor_max_samples")
+        if max_anchor_samples is not None and int(max_anchor_samples) > 0 and obs.shape[0] > int(max_anchor_samples):
+            idx = np.linspace(0, obs.shape[0] - 1, int(max_anchor_samples), dtype=int)
+            agent.set_bc_anchor(obs[idx], act[idx])
+        else:
+            agent.set_bc_anchor(obs, act)
     if losses:
         out = {
             "dataset": str(dataset_path.resolve()),
@@ -308,7 +315,7 @@ def train_off_policy(agent, rl_cfg, config: dict, algorithm: str, run_dir: Path,
                 residual_action = agent.select_action(obs, noise=sigma)
             if residual_enabled:
                 prior_action = compute_prior_action(prior, env, obs, info)
-                residual_action = adapt_action_to_env(residual_action, env)
+                residual_action = shield_residual_action(residual_action, env, info, residual_cfg)
                 scale = residual_gate(info, residual_cfg)
                 action = np.clip(
                     prior_action + scale * residual_action,
@@ -366,6 +373,7 @@ def train_ppo(agent: PPOAgent, config: dict, run_dir: Path, episodes: int):
     scenario_sampler = ScenarioSampler(list(config["scenarios"]), config)
     residual_cfg = dict(config.get("residual_control", {}))
     residual_enabled = bool(residual_cfg.get("enabled", False))
+    imitation_cfg = dict(config.get("imitation", {}))
     pbar = trange(episodes, desc="PPO")
     for episode in pbar:
         scenario = scenario_sampler.select(episode)
@@ -381,7 +389,7 @@ def train_ppo(agent: PPOAgent, config: dict, run_dir: Path, episodes: int):
             residual_action, logp, value = agent.act_for_training(obs)
             if residual_enabled:
                 prior_action = compute_prior_action(prior, env, obs, info)
-                residual_action = adapt_action_to_env(residual_action, env)
+                residual_action = shield_residual_action(residual_action, env, info, residual_cfg)
                 scale = residual_gate(info, residual_cfg)
                 action = np.clip(
                     prior_action + scale * residual_action,
@@ -413,13 +421,24 @@ def train_ppo(agent: PPOAgent, config: dict, run_dir: Path, episodes: int):
         )
         trajectory["ret"] = returns
         trajectory["adv"] = adv
-        critic_loss, actor_loss = agent.train_trajectory(trajectory)
+        bc_anchor_weight = linear_decay(
+            float(imitation_cfg.get("anchor_initial_weight", 0.0)),
+            float(imitation_cfg.get("anchor_final_weight", 0.0)),
+            episode,
+            int(imitation_cfg.get("anchor_decay_episodes", max(1, episodes))),
+        )
+        critic_loss, actor_loss = agent.train_trajectory(
+            trajectory,
+            bc_anchor_weight=bc_anchor_weight,
+            bc_anchor_batch_size=imitation_cfg.get("anchor_batch_size"),
+        )
         record = {
             "episode": episode + 1,
             "scenario": scenario["name"],
             "return": ep_return,
             "critic_loss": critic_loss,
             "actor_loss": actor_loss,
+            "bc_anchor_weight": bc_anchor_weight,
             "eval_mean_return": None,
         }
         if eval_every > 0 and (episode + 1) % eval_every == 0:
@@ -475,6 +494,10 @@ def main():
         pretrain_losses = pretrain_ppo_from_imitation(agent, config, run_dir)
         if pretrain_losses:
             agent.save(ckpt_dir / "imitation_pretrained.pt")
+            if config.get("imitation", {}).get("eval_pretrained", True):
+                eval_summary = evaluate_agent(agent, config)
+                with (run_dir / "imitation_pretrained_eval.json").open("w", encoding="utf-8") as f:
+                    json.dump(eval_summary, f, indent=2)
         history, eval_history = train_ppo(agent, config, run_dir, episodes)
     else:
         history, eval_history = train_off_policy(agent, rl_cfg, config, args.algorithm, run_dir, episodes)
