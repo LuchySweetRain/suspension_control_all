@@ -312,3 +312,45 @@ Next algorithm step:
 - Tune or adapt the constraint weights instead of using fixed global coefficients, e.g. increase `lambda_delta` only when unsafe rate is already below target, or use a Lagrangian update for `lambda_unsafe`, `lambda_delta`, and `lambda_proj`.
 - Add held-out road-condition labels to identify whether this failure is caused by a particular road/scenario rather than seed stochasticity alone.
 - Re-run the 3-seed e20 sweep after adaptive constraint weighting. The acceptance criterion is that `projection_aware_imitation` is supported on all planned seeds, or that any unsupported seed has a reproducible, diagnosable road-condition failure.
+
+## 2026-06-01: Adaptive Constraint PPO and Feasibility-Gate Ablation
+
+Algorithm change:
+
+- PPO now supports adaptive Lagrangian-style constraint weights for projection error, unsafe fraction, and executed-action delta.
+- After each trajectory, the weights update as `lambda <- clip(lambda + lr * (observed_constraint - target_constraint), 0, lambda_max)`.
+- Training history records the current `projection_penalty_weight`, `unsafe_penalty_weight`, and `action_delta_penalty_weight` per episode, making the constraint adaptation auditable.
+- PPO checkpoints store the current adaptive weights.
+
+Hard-case command:
+
+```text
+python scripts/run_projection_seed_sweep.py --config configs/mujoco_full_car_safe_ppo.yaml --out results/projection_seed44_e20_adaptive_constraint --seeds 44 --episodes 20 --expert-episodes 20
+```
+
+Seed 44 adaptive-constraint result:
+
+| Variant | Return | UnsafeSteps | BodyAccRMS | PitchAccRMS | RollAccRMS | ActionDeltaRMS | TrackingRMS | ProjectionError |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| ppo_scratch | -13478.2070 | 114.0 | 2.8986 | 3.8833 | 3.2651 | 95.5528 | 142.5772 | 0.3261 |
+| bc_ppo | -11438.7318 | 18.6 | 2.5868 | 6.3926 | 3.2169 | 175.7811 | 262.2883 | 0.5808 |
+
+Interpretation:
+
+- Adaptive constraints improve the seed 44 return and reduce unsafe steps relative to PPO scratch.
+- The full core claim is still weak because pitch, action smoothness, actuator tracking, and projection error are worse.
+- Training logs show the projection multiplier reaches the configured maximum, but projection error remains high. This suggests the current actor has an action-distribution mismatch that cannot be solved by scalar penalties alone.
+
+Additional ablation:
+
+```text
+python scripts/run_projection_seed_sweep.py --config configs/mujoco_full_car_safe_ppo.yaml --out results/projection_seed44_e20_feasibility_gated --seeds 44 --episodes 20 --expert-episodes 20
+```
+
+The feasibility-gated positive-advantage update was too conservative on seed 44: BC-PPO collapsed toward near-zero actions, giving excellent smoothness/projection metrics but `301.0` unsafe steps and return `-23182.5172`. The mechanism remains implemented as an optional ablation (`feasibility_advantage_weight`), but it is disabled in the default safe PPO config until redesigned.
+
+Next algorithm correction:
+
+- Replace scalar action outputs with a projection-aware action parameterization, e.g. train PPO to output a feasible action increment or a safety-layer preconditioned action rather than an unconstrained raw force.
+- Alternatively, make the feasibility gate state-dependent: apply it only after unsafe rate is below target, or gate only unsafe-positive samples instead of all projection/action-delta violations.
+- The current publishable novelty candidate is now: **adaptive constraint-regularized offline-to-online PPO**, with seed 44 serving as the hard-case evidence that motivates projection-aware policy parameterization.

@@ -29,3 +29,11 @@ rl:
     projection_penalty_weight: 0.2
     unsafe_penalty_weight: 1.0
     action_delta_penalty_weight: 0.4
+    adaptive_constraint_weights: true
+    constraint_weight_lr: 0.5
+    projection_error_target: 0.18
+    unsafe_fraction_target: 0.0
+    action_delta_target: 0.02
+    max_constraint_weight: 3.0
+    feasibility_advantage_weight: 0.0
+    feasibility_advantage_min: 0.2

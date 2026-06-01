@@ -599,4 +599,7 @@ Implementation status:
 - Done: `configs/mujoco_full_car_safe_ppo.yaml` enables `action_delta_penalty_weight` for the PPO-centered method.
 - Done: `run_si_rppo_ablation.py` sets projection, unsafe, and action-delta penalties to zero for `ppo_scratch`, preserving a standard PPO baseline.
 - Current evidence: fixed unsafe/action-delta coefficients improve seed 44 safety and return but still fail the full comfort/smoothness/projection claim.
-- Next: replace fixed coefficients with adaptive constraint weighting or a Lagrangian PPO variant, then re-run `run_projection_seed_sweep.py` with `--seeds 42,43,44 --episodes 20` and require all seeds to support `projection_aware_imitation` before claiming robust superiority.
+- Done: adaptive Lagrangian-style constraint weights are implemented and logged per episode.
+- Current evidence: adaptive constraints improve seed 44 return and unsafe steps, but pitch, action smoothness, tracking, and projection error remain weak.
+- Negative ablation: feasibility-gated positive advantages were too conservative and collapsed seed 44 toward passive actions; this option is implemented but disabled in the default config.
+- Next: move beyond scalar penalties toward a projection-aware action parameterization or state-dependent feasibility gate, then re-run `run_projection_seed_sweep.py` with `--seeds 42,43,44 --episodes 20` and require all seeds to support `projection_aware_imitation` before claiming robust superiority.

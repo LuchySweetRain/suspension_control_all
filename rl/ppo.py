@@ -31,6 +31,14 @@ class PPOConfig:
     projection_penalty_weight: float
     unsafe_penalty_weight: float
     action_delta_penalty_weight: float
+    adaptive_constraint_weights: bool
+    constraint_weight_lr: float
+    projection_error_target: float
+    unsafe_fraction_target: float
+    action_delta_target: float
+    max_constraint_weight: float
+    feasibility_advantage_weight: float
+    feasibility_advantage_min: float
     gradient_clip: float
     base_encoder_dim: int
     preview_embed_dim: int
@@ -72,6 +80,14 @@ class PPOConfig:
             projection_penalty_weight=float(ppo.get("projection_penalty_weight", 0.0)),
             unsafe_penalty_weight=float(ppo.get("unsafe_penalty_weight", 0.0)),
             action_delta_penalty_weight=float(ppo.get("action_delta_penalty_weight", 0.0)),
+            adaptive_constraint_weights=bool(ppo.get("adaptive_constraint_weights", False)),
+            constraint_weight_lr=float(ppo.get("constraint_weight_lr", 0.0)),
+            projection_error_target=float(ppo.get("projection_error_target", 0.0)),
+            unsafe_fraction_target=float(ppo.get("unsafe_fraction_target", 0.0)),
+            action_delta_target=float(ppo.get("action_delta_target", 0.0)),
+            max_constraint_weight=float(ppo.get("max_constraint_weight", 10.0)),
+            feasibility_advantage_weight=float(ppo.get("feasibility_advantage_weight", 0.0)),
+            feasibility_advantage_min=float(ppo.get("feasibility_advantage_min", 0.0)),
             gradient_clip=float(rl["gradient_clip"]),
             base_encoder_dim=128,
             preview_embed_dim=int(rl["preview_embed_dim"]),
@@ -94,6 +110,9 @@ class PPOAgent:
         self.value_optimizer = optim.Adam(self.value.parameters(), lr=cfg.critic_lr)
         self.bc_anchor_obs: torch.Tensor | None = None
         self.bc_anchor_act: torch.Tensor | None = None
+        self.projection_penalty_weight = float(cfg.projection_penalty_weight)
+        self.unsafe_penalty_weight = float(cfg.unsafe_penalty_weight)
+        self.action_delta_penalty_weight = float(cfg.action_delta_penalty_weight)
 
     def select_action(self, obs: np.ndarray, noise: float = 0.0) -> np.ndarray:
         obs_t = torch.as_tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
@@ -129,7 +148,54 @@ class PPOAgent:
         self.bc_anchor_obs = torch.as_tensor(np.asarray(obs), dtype=torch.float32, device=self.device)
         self.bc_anchor_act = torch.as_tensor(np.asarray(act), dtype=torch.float32, device=self.device)
 
+    def _update_constraint_weights(self, trajectory: dict[str, list]) -> dict[str, float]:
+        def mean_or_zero(values) -> float:
+            arr = np.asarray(values, dtype=np.float32)
+            return float(np.mean(arr)) if arr.size else 0.0
+
+        stats = {
+            "projection_penalty_weight": self.projection_penalty_weight,
+            "unsafe_penalty_weight": self.unsafe_penalty_weight,
+            "action_delta_penalty_weight": self.action_delta_penalty_weight,
+            "projection_error_mean": mean_or_zero(trajectory.get("projection_error", [0.0])),
+            "unsafe_fraction": mean_or_zero(trajectory.get("unsafe", [0.0])),
+            "action_delta_mean": mean_or_zero(trajectory.get("action_delta", [0.0])),
+        }
+        if not self.cfg.adaptive_constraint_weights:
+            return stats
+        lr = float(self.cfg.constraint_weight_lr)
+        max_weight = max(0.0, float(self.cfg.max_constraint_weight))
+
+        def update(current: float, observed: float, target: float) -> float:
+            return float(np.clip(current + lr * (observed - target), 0.0, max_weight))
+
+        self.projection_penalty_weight = update(
+            self.projection_penalty_weight,
+            stats["projection_error_mean"],
+            self.cfg.projection_error_target,
+        )
+        self.unsafe_penalty_weight = update(
+            self.unsafe_penalty_weight,
+            stats["unsafe_fraction"],
+            self.cfg.unsafe_fraction_target,
+        )
+        self.action_delta_penalty_weight = update(
+            self.action_delta_penalty_weight,
+            stats["action_delta_mean"],
+            self.cfg.action_delta_target,
+        )
+        stats.update(self.constraint_weight_summary())
+        return stats
+
+    def constraint_weight_summary(self) -> dict[str, float]:
+        return {
+            "projection_penalty_weight": float(self.projection_penalty_weight),
+            "unsafe_penalty_weight": float(self.unsafe_penalty_weight),
+            "action_delta_penalty_weight": float(self.action_delta_penalty_weight),
+        }
+
     def train_trajectory(self, trajectory: dict[str, list], bc_anchor_weight: float = 0.0, bc_anchor_batch_size: int | None = None) -> tuple[float, float]:
+        self._update_constraint_weights(trajectory)
         obs = torch.as_tensor(np.asarray(trajectory["obs"]), dtype=torch.float32, device=self.device)
         act = torch.as_tensor(np.asarray(trajectory["act"]), dtype=torch.float32, device=self.device)
         old_logp = torch.as_tensor(np.asarray(trajectory["logp"]), dtype=torch.float32, device=self.device).unsqueeze(1)
@@ -151,6 +217,19 @@ class PPOAgent:
             device=self.device,
         ).unsqueeze(1)
         adv = (adv - adv.mean()) / (adv.std() + 1e-8)
+        if self.cfg.feasibility_advantage_weight > 0.0:
+            violation = (
+                torch.relu(projection_error - self.cfg.projection_error_target)
+                + torch.relu(unsafe - self.cfg.unsafe_fraction_target)
+                + torch.relu(action_delta - self.cfg.action_delta_target)
+            )
+            feasibility_weight = torch.exp(-self.cfg.feasibility_advantage_weight * violation)
+            feasibility_weight = torch.clamp(
+                feasibility_weight,
+                min=float(self.cfg.feasibility_advantage_min),
+                max=1.0,
+            )
+            adv = torch.where(adv > 0.0, adv * feasibility_weight, adv)
         n = obs.shape[0]
         actor_losses = []
         value_losses = []
@@ -163,12 +242,12 @@ class PPOAgent:
                 clipped = torch.clamp(ratio, 1 - self.cfg.clip_ratio, 1 + self.cfg.clip_ratio) * adv[idx]
                 actor_loss = -(torch.min(ratio * adv[idx], clipped)).mean()
                 actor_loss = actor_loss - self.cfg.entropy_coef * entropy.mean()
-                if self.cfg.projection_penalty_weight > 0.0:
-                    actor_loss = actor_loss + self.cfg.projection_penalty_weight * (ratio * projection_error[idx]).mean()
-                if self.cfg.unsafe_penalty_weight > 0.0:
-                    actor_loss = actor_loss + self.cfg.unsafe_penalty_weight * (ratio * unsafe[idx]).mean()
-                if self.cfg.action_delta_penalty_weight > 0.0:
-                    actor_loss = actor_loss + self.cfg.action_delta_penalty_weight * (ratio * action_delta[idx]).mean()
+                if self.projection_penalty_weight > 0.0:
+                    actor_loss = actor_loss + self.projection_penalty_weight * (ratio * projection_error[idx]).mean()
+                if self.unsafe_penalty_weight > 0.0:
+                    actor_loss = actor_loss + self.unsafe_penalty_weight * (ratio * unsafe[idx]).mean()
+                if self.action_delta_penalty_weight > 0.0:
+                    actor_loss = actor_loss + self.action_delta_penalty_weight * (ratio * action_delta[idx]).mean()
                 if bc_anchor_weight > 0.0 and self.bc_anchor_obs is not None and self.bc_anchor_act is not None:
                     anchor_n = int(self.bc_anchor_obs.shape[0])
                     anchor_batch = int(bc_anchor_batch_size or idx.shape[0])
@@ -237,6 +316,7 @@ class PPOAgent:
                 "cfg": self.cfg.__dict__,
                 "actor": self.actor.state_dict(),
                 "value": self.value.state_dict(),
+                "constraint_weights": self.constraint_weight_summary(),
             },
             path,
         )
@@ -245,6 +325,13 @@ class PPOAgent:
         ckpt = torch.load(path, map_location=self.device, weights_only=False)
         self.actor.load_state_dict(ckpt["actor"])
         self.value.load_state_dict(ckpt["value"])
+        for key, value in ckpt.get("constraint_weights", {}).items():
+            if key == "projection_penalty_weight":
+                self.projection_penalty_weight = float(value)
+            elif key == "unsafe_penalty_weight":
+                self.unsafe_penalty_weight = float(value)
+            elif key == "action_delta_penalty_weight":
+                self.action_delta_penalty_weight = float(value)
 
 
 def finish_ppo_trajectory(

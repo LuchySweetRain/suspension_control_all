@@ -489,6 +489,8 @@ def train_ppo(agent: PPOAgent, config: dict, run_dir: Path, episodes: int):
             "mean_action_delta": float(np.mean(trajectory["action_delta"])) if trajectory["action_delta"] else 0.0,
             "eval_mean_return": None,
         }
+        if hasattr(agent, "constraint_weight_summary"):
+            record.update(agent.constraint_weight_summary())
         if eval_every > 0 and (episode + 1) % eval_every == 0:
             eval_summary = evaluate_agent(agent, config)
             eval_summary["episode"] = episode + 1

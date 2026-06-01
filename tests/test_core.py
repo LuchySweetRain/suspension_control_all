@@ -212,6 +212,8 @@ def test_ppo_unsafe_penalty_accepts_trajectory_flags():
         "projection_penalty_weight": 0.1,
         "unsafe_penalty_weight": 0.5,
         "action_delta_penalty_weight": 0.25,
+        "feasibility_advantage_weight": 1.0,
+        "feasibility_advantage_min": 0.1,
     }
     ppo_cfg = PPOConfig.from_project_config(c)
     agent = PPOAgent(ppo_cfg, torch.device("cpu"))
@@ -230,6 +232,43 @@ def test_ppo_unsafe_penalty_accepts_trajectory_flags():
     assert np.isfinite(actor_loss)
     assert ppo_cfg.unsafe_penalty_weight == 0.5
     assert ppo_cfg.action_delta_penalty_weight == 0.25
+    assert ppo_cfg.feasibility_advantage_weight == 1.0
+
+
+def test_ppo_adaptive_constraint_weights_update_from_trajectory():
+    c = cfg()
+    c["rl"]["ppo"] = {
+        "train_epochs": 1,
+        "minibatch_size": 2,
+        "projection_penalty_weight": 0.1,
+        "unsafe_penalty_weight": 0.2,
+        "action_delta_penalty_weight": 0.3,
+        "adaptive_constraint_weights": True,
+        "constraint_weight_lr": 1.0,
+        "projection_error_target": 0.1,
+        "unsafe_fraction_target": 0.0,
+        "action_delta_target": 0.05,
+        "max_constraint_weight": 2.0,
+        "feasibility_advantage_weight": 1.0,
+        "feasibility_advantage_min": 0.1,
+    }
+    ppo_cfg = PPOConfig.from_project_config(c)
+    agent = PPOAgent(ppo_cfg, torch.device("cpu"))
+    trajectory = {
+        "obs": np.zeros((2, ppo_cfg.obs_dim), dtype=np.float32),
+        "act": np.zeros((2, ppo_cfg.act_dim), dtype=np.float32),
+        "logp": [0.0, 0.0],
+        "ret": [0.0, -1.0],
+        "adv": [0.5, -0.5],
+        "projection_error": [0.2, 0.2],
+        "unsafe": [0.0, 1.0],
+        "action_delta": [0.1, 0.1],
+    }
+    agent.train_trajectory(trajectory)
+    weights = agent.constraint_weight_summary()
+    assert weights["projection_penalty_weight"] > 0.1
+    assert weights["unsafe_penalty_weight"] > 0.2
+    assert weights["action_delta_penalty_weight"] > 0.3
 
 
 def test_mujoco_half_car_env_render_smoke():
@@ -747,9 +786,13 @@ def test_si_rppo_ablation_dry_run_writes_variants(tmp_path):
     assert scratch_cfg["rl"]["ppo"]["projection_penalty_weight"] == 0.0
     assert scratch_cfg["rl"]["ppo"]["unsafe_penalty_weight"] == 0.0
     assert scratch_cfg["rl"]["ppo"]["action_delta_penalty_weight"] == 0.0
+    assert not scratch_cfg["rl"]["ppo"]["adaptive_constraint_weights"]
+    assert scratch_cfg["rl"]["ppo"]["feasibility_advantage_weight"] == 0.0
     assert bc_cfg["rl"]["ppo"]["projection_penalty_weight"] > 0.0
     assert bc_cfg["rl"]["ppo"]["unsafe_penalty_weight"] > 0.0
     assert bc_cfg["rl"]["ppo"]["action_delta_penalty_weight"] > 0.0
+    assert bc_cfg["rl"]["ppo"]["adaptive_constraint_weights"]
+    assert "feasibility_advantage_weight" in bc_cfg["rl"]["ppo"]
     assert not residual_cfg["imitation"]["anchor_enabled"]
     assert not residual_cfg["residual_control"]["shield"]["enabled"]
     assert not safe_cfg["imitation"]["anchor_enabled"]

@@ -31,6 +31,8 @@ VARIANTS = {
                 "projection_penalty_weight": 0.0,
                 "unsafe_penalty_weight": 0.0,
                 "action_delta_penalty_weight": 0.0,
+                "adaptive_constraint_weights": False,
+                "feasibility_advantage_weight": 0.0,
             }
         },
         "reward": {"deviation": 0.0},
