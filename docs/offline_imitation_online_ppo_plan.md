@@ -420,6 +420,12 @@ Run:
 python scripts/run_si_rppo_ablation.py --config configs/mujoco_full_car_safe_ppo.yaml --episodes 200 --expert-episodes 20
 ```
 
+Add off-policy TD3/SAC baselines:
+
+```text
+python scripts/run_si_rppo_ablation.py --config configs/mujoco_full_car_safe_ppo.yaml --episodes 200 --expert-episodes 20 --baseline-algorithms td3,sac
+```
+
 Fast smoke check:
 
 ```text
@@ -465,7 +471,7 @@ Implemented in the current worktree:
 - Deviation reward component penalizing final action drift from the prior action.
 - Benchmark metric reporting for action deviation.
 - SI-RPPO ablation runner that materializes variant configs, collects expert data, trains PPO variants, evaluates them, and writes a combined metrics table.
-- SI-RPPO claim report that checks whether imitation initialization, residual structure, and safety gating are supported by the measured PPO metrics.
+- SI-RPPO claim report that checks whether imitation initialization, residual structure, safety gating, and optional TD3/SAC off-policy comparisons are supported by measured metrics.
 
 The next required evidence is an ablation table comparing:
 
@@ -489,7 +495,7 @@ Required ablations:
 - PPO scratch vs BC-PPO: proves imitation initialization helps.
 - BC-PPO vs residual BC-PPO: proves the prior/residual structure helps.
 - residual BC-PPO vs safe residual BC-PPO: proves residual gate and deviation penalty help under preview error and safety constraints.
-- safe residual BC-PPO vs TD3/SAC: positions PPO against off-policy continuous-control baselines.
+- safe residual BC-PPO vs TD3/SAC: positions PPO against off-policy continuous-control baselines. Implemented through `--baseline-algorithms td3,sac`.
 
 The ablation runner now writes:
 

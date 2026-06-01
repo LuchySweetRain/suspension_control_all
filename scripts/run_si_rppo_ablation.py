@@ -91,7 +91,7 @@ def _latest_checkpoint(algorithm: str, not_before: float) -> tuple[Path, Path]:
     return checkpoint, checkpoint.parents[1]
 
 
-def _train_variant(config_path: Path, episodes: int) -> tuple[Path, Path]:
+def _train_algorithm(config_path: Path, algorithm: str, episodes: int) -> tuple[Path, Path]:
     before = datetime.now().timestamp() - 1.0
     subprocess.run(
         [
@@ -100,14 +100,18 @@ def _train_variant(config_path: Path, episodes: int) -> tuple[Path, Path]:
             "--config",
             str(config_path),
             "--algorithm",
-            "ppo",
+            algorithm,
             "--episodes",
             str(episodes),
         ],
         cwd=ROOT,
         check=True,
     )
-    return _latest_checkpoint("ppo", before)
+    return _latest_checkpoint(algorithm, before)
+
+
+def _train_variant(config_path: Path, episodes: int) -> tuple[Path, Path]:
+    return _train_algorithm(config_path, "ppo", episodes)
 
 
 def _summarize_metrics(metrics: pd.DataFrame) -> dict:
@@ -174,21 +178,77 @@ def build_claim_report(combined: pd.DataFrame, out_dir: Path) -> dict:
             "comparisons": [{**item, "status": "missing_data", "metrics": {}} for item in comparisons],
         }
     else:
-        rl_rows = combined[combined["Controller"].astype(str).str.lower() == "ppo"]
-        available = [m for m in CLAIM_METRICS if m in rl_rows.columns]
-        grouped = rl_rows.groupby("Variant", dropna=False)[available].mean(numeric_only=True)
+        available = [m for m in CLAIM_METRICS if m in combined.columns]
+        grouped = combined.groupby(["Variant", "Controller"], dropna=False)[available].mean(numeric_only=True)
+
+        def row_key(variant: str, controller: str) -> tuple[str, str]:
+            return (variant, controller.upper())
+
+        def has_row(variant: str, controller: str) -> bool:
+            return row_key(variant, controller) in grouped.index
+
+        def metric_value(variant: str, controller: str, metric: str) -> float:
+            return grouped.loc[row_key(variant, controller), metric]
+
         comparison_results = []
         for item in comparisons:
             candidate = item["candidate"]
             baseline = item["baseline"]
-            missing = [name for name in (candidate, baseline) if name not in grouped.index]
+            missing = [name for name in (candidate, baseline) if not has_row(name, "PPO")]
             if missing:
                 comparison_results.append({**item, "status": "missing_variant", "missing": missing, "metrics": {}})
                 continue
             metrics = {}
             required = [m for m in item["required_metrics"] if m in grouped.columns]
             for metric in required:
-                metrics[metric] = _metric_delta(metric, grouped.loc[candidate, metric], grouped.loc[baseline, metric])
+                metrics[metric] = _metric_delta(metric, metric_value(candidate, "PPO", metric), metric_value(baseline, "PPO", metric))
+            improved = [m for m, data in metrics.items() if data["improved"] is True]
+            worsened = [m for m, data in metrics.items() if data["improved"] is False]
+            critical = [m for m in ("UnsafeSteps", "ActuatorSaturationRatio") if m in worsened]
+            status = "supported" if improved and not critical else "weak_or_contradicted"
+            comparison_results.append(
+                {
+                    **item,
+                    "status": status,
+                    "improved_metrics": improved,
+                    "worsened_metrics": worsened,
+                    "critical_worsened_metrics": critical,
+                    "metrics": metrics,
+                }
+            )
+        for algorithm in ("td3", "sac"):
+            baseline_variant = f"{algorithm}_baseline"
+            item = {
+                "name": f"safe_residual_ppo_vs_{algorithm}",
+                "candidate": "safe_residual_bc_ppo",
+                "baseline": baseline_variant,
+                "claim": f"Safe residual BC-PPO should be competitive with the off-policy {algorithm.upper()} baseline.",
+                "required_metrics": [
+                    "EpisodeReturn",
+                    "UnsafeSteps",
+                    "BodyAccRMS_mps2",
+                    "PitchAccRMS_radps2",
+                    "RollAccRMS_radps2",
+                    "ActionDeltaRMS_N",
+                    "ActuatorSaturationRatio",
+                ],
+            }
+            if not has_row("safe_residual_bc_ppo", "PPO") or not has_row(baseline_variant, algorithm):
+                missing = []
+                if not has_row("safe_residual_bc_ppo", "PPO"):
+                    missing.append("safe_residual_bc_ppo/PPO")
+                if not has_row(baseline_variant, algorithm):
+                    missing.append(f"{baseline_variant}/{algorithm.upper()}")
+                comparison_results.append({**item, "status": "missing_variant", "missing": missing, "metrics": {}})
+                continue
+            metrics = {}
+            required = [m for m in item["required_metrics"] if m in grouped.columns]
+            for metric in required:
+                metrics[metric] = _metric_delta(
+                    metric,
+                    metric_value("safe_residual_bc_ppo", "PPO", metric),
+                    metric_value(baseline_variant, algorithm, metric),
+                )
             improved = [m for m, data in metrics.items() if data["improved"] is True]
             worsened = [m for m, data in metrics.items() if data["improved"] is False]
             critical = [m for m in ("UnsafeSteps", "ActuatorSaturationRatio") if m in worsened]
@@ -282,6 +342,7 @@ def run_si_rppo_ablation(
     episode_seconds: float | None = None,
     mujoco_settle_seconds: float | None = None,
     variants: list[str] | None = None,
+    baseline_algorithms: list[str] | None = None,
     dry_run: bool = False,
 ) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -375,6 +436,66 @@ def run_si_rppo_ablation(
             "summary": _summarize_metrics(metrics),
         }
 
+    baseline_reports = {}
+    for algorithm in baseline_algorithms or []:
+        algorithm = algorithm.lower().strip()
+        if algorithm not in {"td3", "sac"}:
+            raise ValueError(f"Unsupported off-policy baseline algorithm: {algorithm}")
+        name = f"{algorithm}_baseline"
+        baseline_dir = out_dir / name
+        baseline_config = deep_update(
+            deepcopy(base_config),
+            {
+                "residual_control": {"enabled": False},
+                "imitation": {"enabled": False},
+                "reward": {"deviation": 0.0},
+                "evaluation": {"controllers": ["PASSIVE", "FULL_CAR_MPC_LITE"]},
+            },
+        )
+        if episodes <= 1:
+            baseline_config["rl"]["eval_every"] = 0
+            baseline_config["rl"]["warmup_steps"] = min(1, int(baseline_config["rl"].get("warmup_steps", 1)))
+            baseline_config["rl"]["batch_size"] = min(8, int(baseline_config["rl"].get("batch_size", 8)))
+        config_path = baseline_dir / "config.yaml"
+        _write_config(baseline_config, config_path)
+        if dry_run:
+            baseline_reports[name] = {
+                "algorithm": algorithm,
+                "config": str(config_path.resolve()),
+                "planned_train_command": [
+                    sys.executable,
+                    str(ROOT / "scripts" / "train_rl.py"),
+                    "--config",
+                    str(config_path.resolve()),
+                    "--algorithm",
+                    algorithm,
+                    "--episodes",
+                    str(episodes),
+                ],
+            }
+            continue
+
+        checkpoint, run_dir = _train_algorithm(config_path, algorithm, episodes)
+        eval_config = deepcopy(baseline_config)
+        if eval_scenario_limit is not None:
+            eval_config["scenarios"] = list(eval_config["scenarios"])[: int(eval_scenario_limit)]
+        eval_dir = baseline_dir / "evaluation"
+        metrics, _ = evaluate_all(eval_config, checkpoints={algorithm: str(checkpoint)}, result_dir=eval_dir)
+        report_path = build_report(eval_dir)
+        metrics_copy = metrics.copy()
+        metrics_copy.insert(0, "Variant", name)
+        combined_rows.append(metrics_copy)
+        baseline_reports[name] = {
+            "algorithm": algorithm,
+            "config": str(config_path.resolve()),
+            "run_dir": str(run_dir.resolve()),
+            "checkpoint": str(checkpoint.resolve()),
+            "evaluation_dir": str(eval_dir.resolve()),
+            "benchmark_report": str(report_path.resolve()),
+            "metric_rows": int(len(metrics)),
+            "summary": _summarize_metrics(metrics),
+        }
+
     combined = pd.concat(combined_rows, ignore_index=True) if combined_rows else pd.DataFrame()
     combined_path = out_dir / "combined_metrics.csv"
     combined.to_csv(combined_path, index=False)
@@ -389,6 +510,7 @@ def run_si_rppo_ablation(
         "mujoco_settle_seconds": base_config.get("mujoco", {}).get("settle_seconds"),
         "expert_manifest": expert_manifest,
         "variants": variant_reports,
+        "off_policy_baselines": baseline_reports,
         "combined_metrics": str(combined_path.resolve()),
         "claim_report": {
             "status": claim_report["status"],
@@ -412,6 +534,7 @@ def main():
     parser.add_argument("--episode-seconds", type=float, default=None)
     parser.add_argument("--mujoco-settle-seconds", type=float, default=None)
     parser.add_argument("--variants", default="", help="Comma-separated subset of ppo_scratch,bc_ppo,residual_bc_ppo,safe_residual_bc_ppo.")
+    parser.add_argument("--baseline-algorithms", default="", help="Comma-separated off-policy baselines to include: td3,sac.")
     parser.add_argument("--dry-run", action="store_true", help="Write ablation configs and manifest without collecting data or training.")
     args = parser.parse_args()
     config_path = Path(args.config)
@@ -421,6 +544,7 @@ def main():
     if not out_dir.is_absolute():
         out_dir = ROOT / out_dir
     variants = [item.strip() for item in args.variants.split(",") if item.strip()] or None
+    baseline_algorithms = [item.strip() for item in args.baseline_algorithms.split(",") if item.strip()] or None
     manifest = run_si_rppo_ablation(
         base_config_path=config_path,
         out_dir=out_dir,
@@ -432,6 +556,7 @@ def main():
         episode_seconds=args.episode_seconds,
         mujoco_settle_seconds=args.mujoco_settle_seconds,
         variants=variants,
+        baseline_algorithms=baseline_algorithms,
         dry_run=args.dry_run,
     )
     print(json.dumps(manifest, indent=2))

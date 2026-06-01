@@ -54,6 +54,12 @@ python scripts/run_si_rppo_ablation.py --config configs/mujoco_full_car_safe_ppo
 
 The runner writes `combined_metrics.csv`, `si_rppo_claim_report.json`, and `si_rppo_claim_report.md` under the selected result directory.
 
+Include off-policy TD3/SAC baselines in the same evidence report:
+
+```bash
+python scripts/run_si_rppo_ablation.py --config configs/mujoco_full_car_safe_ppo.yaml --episodes 200 --expert-episodes 20 --baseline-algorithms td3,sac
+```
+
 Run a fast SI-RPPO smoke ablation on one short scenario:
 
 ```bash

@@ -654,6 +654,7 @@ def test_si_rppo_ablation_dry_run_writes_variants(tmp_path):
         eval_scenario_limit=1,
         episode_seconds=0.05,
         mujoco_settle_seconds=0.2,
+        baseline_algorithms=["td3", "sac"],
         dry_run=True,
     )
     assert manifest["dry_run"]
@@ -670,6 +671,11 @@ def test_si_rppo_ablation_dry_run_writes_variants(tmp_path):
         "safe_residual_bc_ppo",
     }
     for report in manifest["variants"].values():
+        config_path = Path(report["config"])
+        assert config_path.is_file()
+        assert report["planned_train_command"]
+    assert set(manifest["off_policy_baselines"]) == {"td3_baseline", "sac_baseline"}
+    for report in manifest["off_policy_baselines"].values():
         config_path = Path(report["config"])
         assert config_path.is_file()
         assert report["planned_train_command"]
@@ -733,6 +739,32 @@ def test_si_rppo_claim_report_detects_supported_ablation(tmp_path):
             "RollAccRMS_radps2": 0.33,
             "ActionDeviationRMS_N": 8.0,
         },
+        {
+            "Variant": "td3_baseline",
+            "Controller": "TD3",
+            "Scenario": "road_a",
+            "EpisodeReturn": -90.0,
+            "UnsafeSteps": 1,
+            "ActuatorSaturationRatio": 0.12,
+            "ActionDeltaRMS_N": 60.0,
+            "BodyAccRMS_mps2": 1.1,
+            "PitchAccRMS_radps2": 0.3,
+            "RollAccRMS_radps2": 0.4,
+            "ActionDeviationRMS_N": 0.0,
+        },
+        {
+            "Variant": "sac_baseline",
+            "Controller": "SAC",
+            "Scenario": "road_a",
+            "EpisodeReturn": -88.0,
+            "UnsafeSteps": 1,
+            "ActuatorSaturationRatio": 0.1,
+            "ActionDeltaRMS_N": 55.0,
+            "BodyAccRMS_mps2": 1.05,
+            "PitchAccRMS_radps2": 0.28,
+            "RollAccRMS_radps2": 0.38,
+            "ActionDeviationRMS_N": 0.0,
+        },
     ]
     report = build_claim_report(pd.DataFrame(rows), tmp_path)
     assert report["status"] == "ready"
@@ -740,6 +772,8 @@ def test_si_rppo_claim_report_detects_supported_ablation(tmp_path):
     assert statuses["imitation_initialization"] == "supported"
     assert statuses["residual_prior_structure"] == "supported"
     assert statuses["safe_residual_gate"] == "supported"
+    assert statuses["safe_residual_ppo_vs_td3"] == "supported"
+    assert statuses["safe_residual_ppo_vs_sac"] == "supported"
     assert Path(report["json_path"]).is_file()
     assert Path(report["markdown_path"]).is_file()
 
