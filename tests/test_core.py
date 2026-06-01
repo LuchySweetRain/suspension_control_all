@@ -15,7 +15,7 @@ if str(ROOT) not in sys.path:
 from config import load_config
 from controllers import MPCController, PIDController, SPDFController
 from controllers.rl_transformer import RLTransformerController
-from controllers.prior import residual_gate, shield_residual_action
+from controllers.prior import residual_gate, shield_policy_action, shield_residual_action
 from envs import HalfCarEnv, MuJoCoFullCarEnv, MuJoCoHalfCarEnv, MuJoCoVehicleEnv
 from experiments.evaluation import evaluate_all, make_controller
 from scripts.benchmark_vector_env import benchmark_vector_env
@@ -593,6 +593,18 @@ def test_residual_gate_and_deviation_reward_smoke():
     near_limit_info["safety"] = dict(info["safety"])
     near_limit_info["safety"]["max_abs_suspension_travel"] = 0.99 * near_limit_info["safety"]["limits"]["max_suspension_travel"]
     shielded = shield_residual_action(np.full(env.action_space.shape, env.force_limit, dtype=np.float32), env, near_limit_info, cfg)
+    policy_limited = shield_policy_action(
+        np.full(env.action_space.shape, env.force_limit, dtype=np.float32),
+        env,
+        info,
+        {"enabled": False, "max_action_fraction": 0.75, "max_delta_fraction": 0.08},
+    )
+    policy_blocked = shield_policy_action(
+        np.full(env.action_space.shape, env.force_limit, dtype=np.float32),
+        env,
+        near_limit_info,
+        {"enabled": True, "max_action_fraction": 0.75, "hard_margin": 0.05, "soft_margin": 0.18},
+    )
     prior = np.zeros(env.action_space.shape, dtype=np.float32)
     action = np.full(env.action_space.shape, 100.0, dtype=np.float32)
     _, _, _, _, no_prior_info = env.step(action)
@@ -603,6 +615,8 @@ def test_residual_gate_and_deviation_reward_smoke():
     env.close()
     assert gate_noisy < gate_nominal
     assert np.max(np.abs(shielded)) < 1e-3
+    assert np.max(np.abs(policy_limited - env.last_action)) <= 0.08 * env.force_limit + 1e-5
+    assert np.max(np.abs(policy_blocked)) < 1e-3
     assert info["has_prior_action"]
     assert np.allclose(info["prior_action"], prior)
     assert info["action_metrics"]["deviation_rms"] > 0.0
@@ -625,6 +639,10 @@ def test_collect_expert_dataset_and_ppo_bc_smoke(tmp_path):
     assert out_path.is_file()
     assert Path(str(out_path).replace(".npz", ".manifest.json")).is_file()
     assert manifest["transitions"] == 3
+    assert manifest["raw_transitions"] == 3
+    assert not manifest["skip_unsafe"]
+    assert manifest["skipped_unsafe"] >= 0
+    assert 0.0 <= manifest["raw_unsafe_fraction"] <= 1.0
     data = np.load(out_path, allow_pickle=True)
     assert data["obs"].shape[0] == 3
     assert data["act"].shape == data["residual_act"].shape
@@ -663,6 +681,8 @@ def test_si_rppo_ablation_dry_run_writes_variants(tmp_path):
         episodes=1,
         expert_episodes=1,
         expert_max_steps=2,
+        expert_controller="PASSIVE",
+        skip_unsafe_expert=True,
         train_scenario_limit=1,
         eval_scenario_limit=1,
         episode_seconds=0.05,
@@ -677,6 +697,10 @@ def test_si_rppo_ablation_dry_run_writes_variants(tmp_path):
     assert materialized["mujoco"]["settle_seconds"] == 0.2
     assert len(materialized["scenarios"]) == 1
     assert manifest["expert_manifest"]["planned"]
+    assert manifest["expert_controller"] == "PASSIVE"
+    assert manifest["skip_unsafe_expert"]
+    assert manifest["expert_manifest"]["expert"] == "PASSIVE"
+    assert manifest["expert_manifest"]["skip_unsafe"]
     assert set(manifest["variants"]) == {
         "ppo_scratch",
         "bc_ppo",
@@ -687,6 +711,17 @@ def test_si_rppo_ablation_dry_run_writes_variants(tmp_path):
         config_path = Path(report["config"])
         assert config_path.is_file()
         assert report["planned_train_command"]
+    residual_cfg = load_config(Path(manifest["variants"]["residual_bc_ppo"]["config"]))
+    safe_cfg = load_config(Path(manifest["variants"]["safe_residual_bc_ppo"]["config"]))
+    bc_cfg = load_config(Path(manifest["variants"]["bc_ppo"]["config"]))
+    scratch_cfg = load_config(Path(manifest["variants"]["ppo_scratch"]["config"]))
+    assert scratch_cfg["rl"]["ppo"]["projection_penalty_weight"] == 0.0
+    assert bc_cfg["rl"]["ppo"]["projection_penalty_weight"] > 0.0
+    assert not residual_cfg["imitation"]["anchor_enabled"]
+    assert not residual_cfg["residual_control"]["shield"]["enabled"]
+    assert not safe_cfg["imitation"]["anchor_enabled"]
+    assert safe_cfg["residual_control"]["shield"]["enabled"]
+    assert bc_cfg["imitation"]["anchor_enabled"]
     assert set(manifest["off_policy_baselines"]) == {"td3_baseline", "sac_baseline"}
     for report in manifest["off_policy_baselines"].values():
         config_path = Path(report["config"])

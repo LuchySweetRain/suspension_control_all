@@ -8,8 +8,8 @@ residual_control:
     enabled: true
     min_scale: 0.0
     max_scale: 0.5
-    safety_deadband: 0.25
-    safety_power: 2.0
+    safety_deadband: 0.1
+    safety_power: 1.0
     delay_weight: 0.05
     noise_weight: 80.0
     bias_weight: 50.0
@@ -17,9 +17,16 @@ residual_control:
     scale_error_weight: 1.0
   shield:
     enabled: true
-    max_residual_fraction: 0.35
-    hard_margin: 0.15
-    soft_margin: 0.35
+    max_residual_fraction: 0.6
+    hard_margin: 0.05
+    soft_margin: 0.18
+
+policy_safety:
+  enabled: true
+  max_action_fraction: 0.75
+  max_delta_fraction: 0.08
+  hard_margin: 0.04
+  soft_margin: 0.2
 
 imitation:
   enabled: false

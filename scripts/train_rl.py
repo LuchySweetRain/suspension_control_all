@@ -17,7 +17,14 @@ if str(ROOT) not in sys.path:
 
 from config import apply_algorithm_overrides, load_config
 from controllers import MPCController, PIDController, SPDFController
-from controllers.prior import adapt_action_to_env, compute_prior_action, make_prior_controller, residual_gate, shield_residual_action
+from controllers.prior import (
+    adapt_action_to_env,
+    compute_prior_action,
+    make_prior_controller,
+    residual_gate,
+    shield_policy_action,
+    shield_residual_action,
+)
 from envs import HalfCarEnv, MuJoCoFullCarEnv, MuJoCoVehicleEnv
 from rl.ddpg import DDPGAgent, DDPGConfig
 from rl.ppo import PPOAgent, PPOConfig, finish_ppo_trajectory
@@ -166,6 +173,7 @@ def evaluate_agent(agent, config: dict) -> dict:
     scenario_returns = {}
     residual_cfg = dict(config.get("residual_control", {}))
     residual_enabled = bool(residual_cfg.get("enabled", False))
+    policy_safety_cfg = dict(config.get("policy_safety", {}))
     for scenario in config["scenarios"]:
         env = make_env(config, scenario=scenario, use_preview=True)
         obs, info = env.reset()
@@ -188,6 +196,7 @@ def evaluate_agent(agent, config: dict) -> dict:
             else:
                 action = residual_action
                 prior_action = None
+            action = shield_policy_action(action, env, info, policy_safety_cfg)
             step_action = {"action": action, "prior_action": prior_action} if residual_enabled else action
             obs, reward, terminated, truncated, info = env.step(step_action)
             ep_return += reward
@@ -283,6 +292,7 @@ def train_off_policy(agent, rl_cfg, config: dict, algorithm: str, run_dir: Path,
     random_warmup = bool(config["rl"].get("random_warmup", len(expert_replay) == 0))
     residual_cfg = dict(config.get("residual_control", {}))
     residual_enabled = bool(residual_cfg.get("enabled", False))
+    policy_safety_cfg = dict(config.get("policy_safety", {}))
     history, eval_history = [], []
     total_steps = 0
     best_eval_return = -float("inf")
@@ -325,6 +335,7 @@ def train_off_policy(agent, rl_cfg, config: dict, algorithm: str, run_dir: Path,
             else:
                 action = residual_action
                 prior_action = None
+            action = shield_policy_action(action, env, info, policy_safety_cfg)
             step_action = {"action": action, "prior_action": prior_action} if residual_enabled else action
             next_obs, reward, terminated, truncated, next_info = env.step(step_action)
             done = terminated or truncated
@@ -374,6 +385,7 @@ def train_ppo(agent: PPOAgent, config: dict, run_dir: Path, episodes: int):
     residual_cfg = dict(config.get("residual_control", {}))
     residual_enabled = bool(residual_cfg.get("enabled", False))
     imitation_cfg = dict(config.get("imitation", {}))
+    policy_safety_cfg = dict(config.get("policy_safety", {}))
     pbar = trange(episodes, desc="PPO")
     for episode in pbar:
         scenario = scenario_sampler.select(episode)
@@ -383,7 +395,7 @@ def train_ppo(agent: PPOAgent, config: dict, run_dir: Path, episodes: int):
         if prior is not None:
             prior.reset()
         done = False
-        trajectory = {"obs": [], "act": [], "logp": [], "rew": [], "value": [], "done": []}
+        trajectory = {"obs": [], "act": [], "logp": [], "rew": [], "value": [], "done": [], "projection_error": []}
         ep_return = 0.0
         while not done:
             residual_action, logp, value = agent.act_for_training(obs)
@@ -399,6 +411,11 @@ def train_ppo(agent: PPOAgent, config: dict, run_dir: Path, episodes: int):
             else:
                 action = residual_action
                 prior_action = None
+            raw_policy_action = np.asarray(action, dtype=np.float32).copy()
+            action = shield_policy_action(action, env, info, policy_safety_cfg)
+            projection_error = float(
+                np.sqrt(np.mean(np.square((np.asarray(action) - raw_policy_action) / max(float(env.force_limit), 1e-6))))
+            )
             step_action = {"action": action, "prior_action": prior_action} if residual_enabled else action
             next_obs, reward, terminated, truncated, next_info = env.step(step_action)
             done = terminated or truncated
@@ -408,6 +425,7 @@ def train_ppo(agent: PPOAgent, config: dict, run_dir: Path, episodes: int):
             trajectory["rew"].append(reward)
             trajectory["value"].append(value)
             trajectory["done"].append(done)
+            trajectory["projection_error"].append(projection_error)
             obs = next_obs
             info = next_info
             ep_return += reward
@@ -439,6 +457,7 @@ def train_ppo(agent: PPOAgent, config: dict, run_dir: Path, episodes: int):
             "critic_loss": critic_loss,
             "actor_loss": actor_loss,
             "bc_anchor_weight": bc_anchor_weight,
+            "mean_projection_error": float(np.mean(trajectory["projection_error"])) if trajectory["projection_error"] else 0.0,
             "eval_mean_return": None,
         }
         if eval_every > 0 and (episode + 1) % eval_every == 0:

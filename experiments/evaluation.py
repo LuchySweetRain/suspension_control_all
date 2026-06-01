@@ -8,7 +8,14 @@ import numpy as np
 import pandas as pd
 
 from controllers import MPCController, PIDController, ReducedFullCarPreviewController, RLTransformerController, SPDFController
-from controllers.prior import adapt_action_to_env, compute_prior_action, make_prior_controller, residual_gate
+from controllers.prior import (
+    adapt_action_to_env,
+    compute_prior_action,
+    make_prior_controller,
+    residual_gate,
+    shield_policy_action,
+    shield_residual_action,
+)
 from envs import HalfCarEnv, MuJoCoFullCarEnv, MuJoCoVehicleEnv
 
 
@@ -38,12 +45,14 @@ class RandomController:
 
 
 class ResidualController:
-    def __init__(self, prior, residual, env, residual_scale: float):
+    def __init__(self, prior, residual, env, residual_cfg: dict):
         self.prior = prior
         self.residual = residual
         self.env = env
-        self.residual_scale = float(residual_scale)
+        self.residual_cfg = dict(residual_cfg)
+        self.residual_scale = float(self.residual_cfg.get("scale", 1.0))
         self.last_prior_action = np.zeros(env.action_space.shape, dtype=np.float32)
+        self.has_prior_action = True
 
     def reset(self):
         if self.prior is not None:
@@ -54,7 +63,8 @@ class ResidualController:
         prior_action = compute_prior_action(self.prior, self.env, obs, info)
         self.last_prior_action = prior_action.copy()
         residual_action = adapt_action_to_env(self.residual.compute_action(obs, info), self.env)
-        scale = residual_gate(info, {"scale": self.residual_scale, "gate": getattr(self, "gate_cfg", {})})
+        residual_action = shield_residual_action(residual_action, self.env, info, self.residual_cfg)
+        scale = residual_gate(info, self.residual_cfg)
         return np.clip(
             prior_action + scale * residual_action,
             self.env.action_space.low,
@@ -63,6 +73,26 @@ class ResidualController:
 
     def prior_action(self, obs, info):
         return self.last_prior_action.copy()
+
+
+class PolicySafetyController:
+    def __init__(self, controller, env, cfg: dict):
+        self.controller = controller
+        self.env = env
+        self.cfg = dict(cfg)
+        self.has_prior_action = bool(getattr(controller, "has_prior_action", False))
+
+    def reset(self):
+        self.controller.reset()
+
+    def compute_action(self, obs, info):
+        action = self.controller.compute_action(obs, info)
+        return shield_policy_action(action, self.env, info, self.cfg)
+
+    def prior_action(self, obs, info):
+        if self.has_prior_action and hasattr(self.controller, "prior_action"):
+            return self.controller.prior_action(obs, info)
+        raise AttributeError("Wrapped controller does not expose a prior action.")
 
 
 def make_env(config: dict, scenario: dict, use_preview: bool = True):
@@ -101,10 +131,13 @@ def make_controller(
         residual_cfg = dict(config.get("residual_control", {}))
         if residual_cfg.get("enabled", False):
             prior = make_prior_controller(str(residual_cfg.get("prior", "spdf")), env, config)
-            controller = ResidualController(prior, rl, env, float(residual_cfg.get("scale", 1.0)))
-            controller.gate_cfg = dict(residual_cfg.get("gate", {}))
-            return controller
-        return rl
+            controller = ResidualController(prior, rl, env, residual_cfg)
+        else:
+            controller = rl
+        policy_safety_cfg = dict(config.get("policy_safety", {}))
+        if policy_safety_cfg:
+            return PolicySafetyController(controller, env, policy_safety_cfg)
+        return controller
     raise ValueError(f"Unknown controller: {name}")
 
 
@@ -117,7 +150,7 @@ def rollout(env: HalfCarEnv, controller, use_preview: bool) -> dict:
         obs_for_controller = obs if use_preview else obs[: env.base_obs_dim]
         action = controller.compute_action(obs_for_controller, info)
         step_action = action
-        if hasattr(controller, "prior_action"):
+        if getattr(controller, "has_prior_action", False):
             step_action = {"action": action, "prior_action": controller.prior_action(obs_for_controller, info)}
         obs, reward, terminated, truncated, info = env.step(step_action)
         d = info["derived"]

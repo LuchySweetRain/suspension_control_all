@@ -28,6 +28,7 @@ class PPOConfig:
     minibatch_size: int
     entropy_coef: float
     value_coef: float
+    projection_penalty_weight: float
     gradient_clip: float
     base_encoder_dim: int
     preview_embed_dim: int
@@ -66,6 +67,7 @@ class PPOConfig:
             minibatch_size=int(ppo.get("minibatch_size", rl.get("batch_size", 128))),
             entropy_coef=float(ppo.get("entropy_coef", 0.0)),
             value_coef=float(ppo.get("value_coef", 0.5)),
+            projection_penalty_weight=float(ppo.get("projection_penalty_weight", 0.0)),
             gradient_clip=float(rl["gradient_clip"]),
             base_encoder_dim=128,
             preview_embed_dim=int(rl["preview_embed_dim"]),
@@ -129,6 +131,11 @@ class PPOAgent:
         old_logp = torch.as_tensor(np.asarray(trajectory["logp"]), dtype=torch.float32, device=self.device).unsqueeze(1)
         returns = torch.as_tensor(np.asarray(trajectory["ret"]), dtype=torch.float32, device=self.device).unsqueeze(1)
         adv = torch.as_tensor(np.asarray(trajectory["adv"]), dtype=torch.float32, device=self.device).unsqueeze(1)
+        projection_error = torch.as_tensor(
+            np.asarray(trajectory.get("projection_error", np.zeros(len(trajectory["obs"])))),
+            dtype=torch.float32,
+            device=self.device,
+        ).unsqueeze(1)
         adv = (adv - adv.mean()) / (adv.std() + 1e-8)
         n = obs.shape[0]
         actor_losses = []
@@ -142,6 +149,8 @@ class PPOAgent:
                 clipped = torch.clamp(ratio, 1 - self.cfg.clip_ratio, 1 + self.cfg.clip_ratio) * adv[idx]
                 actor_loss = -(torch.min(ratio * adv[idx], clipped)).mean()
                 actor_loss = actor_loss - self.cfg.entropy_coef * entropy.mean()
+                if self.cfg.projection_penalty_weight > 0.0:
+                    actor_loss = actor_loss + self.cfg.projection_penalty_weight * (ratio * projection_error[idx]).mean()
                 if bc_anchor_weight > 0.0 and self.bc_anchor_obs is not None and self.bc_anchor_act is not None:
                     anchor_n = int(self.bc_anchor_obs.shape[0])
                     anchor_batch = int(bc_anchor_batch_size or idx.shape[0])

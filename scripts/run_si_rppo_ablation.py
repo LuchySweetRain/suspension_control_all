@@ -26,23 +26,24 @@ VARIANTS = {
         "residual_control": {"enabled": False},
         "imitation": {"enabled": False},
         "evaluation": {"controllers": ["PASSIVE", "FULL_CAR_MPC_LITE"]},
+        "rl": {"ppo": {"projection_penalty_weight": 0.0}},
         "reward": {"deviation": 0.0},
     },
     "bc_ppo": {
         "residual_control": {"enabled": False},
-        "imitation": {"enabled": True, "residual_targets": False},
+        "imitation": {"enabled": True, "residual_targets": False, "anchor_enabled": True},
         "evaluation": {"controllers": ["PASSIVE", "FULL_CAR_MPC_LITE"]},
         "reward": {"deviation": 0.0},
     },
     "residual_bc_ppo": {
-        "residual_control": {"enabled": True, "gate": {"enabled": False}},
-        "imitation": {"enabled": True, "residual_targets": True},
+        "residual_control": {"enabled": True, "gate": {"enabled": False}, "shield": {"enabled": False}},
+        "imitation": {"enabled": True, "residual_targets": True, "anchor_enabled": False},
         "evaluation": {"controllers": ["PASSIVE", "FULL_CAR_MPC_LITE"]},
         "reward": {"deviation": 0.0},
     },
     "safe_residual_bc_ppo": {
         "residual_control": {"enabled": True, "gate": {"enabled": True}},
-        "imitation": {"enabled": True, "residual_targets": True},
+        "imitation": {"enabled": True, "residual_targets": True, "anchor_enabled": False},
         "evaluation": {"controllers": ["PASSIVE", "FULL_CAR_MPC_LITE"]},
     },
 }
@@ -357,6 +358,8 @@ def run_si_rppo_ablation(
     episodes: int,
     expert_episodes: int,
     expert_max_steps: int | None,
+    expert_controller: str = "FULL_CAR_MPC_LITE",
+    skip_unsafe_expert: bool = False,
     train_scenario_limit: int | None = None,
     eval_scenario_limit: int | None = None,
     episode_seconds: float | None = None,
@@ -386,19 +389,21 @@ def run_si_rppo_ablation(
         expert_manifest = {
             "planned": True,
             "out_path": str(dataset_path.resolve()),
-            "expert": "FULL_CAR_MPC_LITE",
+            "expert": expert_controller,
             "episodes": int(expert_episodes),
             "max_steps": expert_max_steps,
             "residual_prior": str(base_config.get("residual_control", {}).get("prior", "FULL_CAR_MPC_LITE")),
+            "skip_unsafe": bool(skip_unsafe_expert),
         }
     else:
         expert_manifest = collect_expert_dataset(
             config_path=materialized_base_config,
             out_path=dataset_path,
-            expert="FULL_CAR_MPC_LITE",
+            expert=expert_controller,
             episodes=expert_episodes,
             max_steps=expert_max_steps,
             residual_prior=str(base_config.get("residual_control", {}).get("prior", "FULL_CAR_MPC_LITE")),
+            skip_unsafe=skip_unsafe_expert,
         )
 
     selected = variants or list(VARIANTS)
@@ -528,6 +533,8 @@ def run_si_rppo_ablation(
         "episodes": int(episodes),
         "episode_seconds": base_config.get("episode_seconds"),
         "mujoco_settle_seconds": base_config.get("mujoco", {}).get("settle_seconds"),
+        "expert_controller": expert_controller,
+        "skip_unsafe_expert": bool(skip_unsafe_expert),
         "expert_manifest": expert_manifest,
         "variants": variant_reports,
         "off_policy_baselines": baseline_reports,
@@ -549,6 +556,8 @@ def main():
     parser.add_argument("--episodes", type=int, default=20)
     parser.add_argument("--expert-episodes", type=int, default=4)
     parser.add_argument("--expert-max-steps", type=int, default=None)
+    parser.add_argument("--expert-controller", default="FULL_CAR_MPC_LITE")
+    parser.add_argument("--skip-unsafe-expert", action="store_true")
     parser.add_argument("--train-scenario-limit", type=int, default=None)
     parser.add_argument("--eval-scenario-limit", type=int, default=None)
     parser.add_argument("--episode-seconds", type=float, default=None)
@@ -571,6 +580,8 @@ def main():
         episodes=args.episodes,
         expert_episodes=args.expert_episodes,
         expert_max_steps=args.expert_max_steps,
+        expert_controller=args.expert_controller,
+        skip_unsafe_expert=args.skip_unsafe_expert,
         train_scenario_limit=args.train_scenario_limit,
         eval_scenario_limit=args.eval_scenario_limit,
         episode_seconds=args.episode_seconds,

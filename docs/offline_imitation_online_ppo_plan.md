@@ -475,7 +475,16 @@ Implemented in the current worktree:
 
 Current evidence is tracked in `docs/si_rppo_experiment_log.md`.
 
-The 2026-06-01 `episodes=20` full-scenario matrix supports the residual prior structure, but it does not yet support the full SI-RPPO claim. Direct BC-PPO degraded performance relative to PPO from scratch, safe residual gating introduced a small unsafe count, and SAC is still a strong baseline. The next required evidence is an improved ablation table comparing:
+The 2026-06-01 `episodes=20` full-scenario matrices show that the residual/prior idea is promising but still fragile. A first run supported residual learning, while the later anchor/shield-isolated run showed a deeper teacher-quality problem: using `FULL_CAR_MPC_LITE` as both expert and prior makes residual labels nearly zero, so the policy inherits a prior that is not safe across the full road benchmark. Direct BC anchoring improves return and unsafe steps over PPO scratch, but it does not yet solve action smoothness. SAC remains a strong baseline.
+
+The current algorithm correction is safe-teacher imitation: collect expert data with raw safety statistics, optionally filter unsafe expert transitions, and allow a conservative teacher such as `PASSIVE` while keeping `FULL_CAR_MPC_LITE` as the residual prior. This turns the method from plain BC-PPO into a safer offline-to-online pipeline:
+
+- offline data curation rejects unsafe demonstrations,
+- behavior cloning initializes a feasible controller,
+- residual PPO learns online improvements around an interpretable prior,
+- safety gating/shielding constrains residual actions during adaptation.
+
+The next required evidence is an improved ablation table comparing:
 
 - PPO from scratch,
 - BC-only PPO,
@@ -517,11 +526,22 @@ Implemented in the current revision:
 - Early PPO anchoring to the imitation policy or expert action, using a decaying BC penalty: `imitation.anchor_*`.
 - A stronger safety gate with a suspension-margin deadband and residual scale schedule: `residual_control.gate.safety_deadband` and `safety_power`.
 - A hard residual safety shield that shrinks the learned residual near suspension, pitch, roll, or wheel-displacement limits: `residual_control.shield`.
+- Expert dataset safety curation: `collect_expert_dataset.py --skip-unsafe` records raw and filtered safety rates.
+- SI-RPPO safe-teacher switches: `run_si_rppo_ablation.py --expert-controller` and `--skip-unsafe-expert`.
+- Learned-policy action projection: `policy_safety` applies action magnitude, action-rate, and safety-margin constraints during training and evaluation.
 
-Next required run:
+Most recent evidence:
 
 ```text
-python scripts/run_si_rppo_ablation.py --config configs/mujoco_full_car_safe_ppo.yaml --out results/si_rppo_e20_anchor_shield --episodes 20 --expert-episodes 20 --baseline-algorithms td3,sac
+python scripts/run_si_rppo_ablation.py --config configs/mujoco_full_car_safe_ppo.yaml --out results/si_rppo_e20_policy_safety --episodes 20 --expert-episodes 20 --expert-controller PASSIVE --skip-unsafe-expert --baseline-algorithms td3,sac
 ```
 
-The target is to make `safe_residual_gate` supported without sacrificing the already-supported `residual_prior_structure` claim.
+This run makes `residual_prior_structure` supported again and shows that policy safety projection sharply reduces PPO unsafe drift. The remaining weakness is that PPO still optimizes the log probability of raw policy actions while the environment executes projected actions. The next algorithm revision should make the projection visible to learning:
+
+- log raw action, projected action, projection error, and safety margin per step,
+- add a projection-consistency penalty to PPO. Implemented as `projection_penalty_weight * ratio * projection_error`,
+- apply this penalty to imitation-initialized PPO branches, while keeping `ppo_scratch` as a standard PPO baseline,
+- optionally down-weight or clip advantages for samples whose executed action differs strongly from the sampled policy action,
+- evaluate whether this turns `imitation_initialization` and `safe_residual_gate` from weak to supported.
+
+The focused `results/si_rppo_e20_projection_bc_focus` run already supports the PPO-centered core claim: standard PPO scratch with the same safety layer reached return `-9962.1158` with `21.0` unsafe steps, while safe-teacher BC plus projection-aware PPO reached return `-3213.2397` with `0.0` unsafe steps and lower action delta. This should become the near-term main paper story. Residual RL remains a secondary extension until the prior controller is improved or replaced.

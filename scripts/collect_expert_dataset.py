@@ -33,6 +33,7 @@ def collect_expert_dataset(
     max_steps: int | None = None,
     residual_prior: str | None = None,
     seed: int | None = None,
+    skip_unsafe: bool = False,
 ) -> dict:
     config = load_config(config_path)
     rng_seed = int(seed if seed is not None else config.get("seed", 42))
@@ -46,6 +47,8 @@ def collect_expert_dataset(
     dones: list[bool] = []
     scenario_names: list[str] = []
     step_metrics: list[dict[str, float]] = []
+    raw_step_metrics: list[dict[str, float]] = []
+    skipped_unsafe = 0
 
     for episode in range(int(episodes)):
         scenario = sampler.select(episode)
@@ -68,14 +71,6 @@ def collect_expert_dataset(
                 residual_action = np.clip(action - prior_action, env.action_space.low, env.action_space.high)
                 next_obs, reward, terminated, truncated, next_info = env.step(action)
                 done = bool(terminated or truncated)
-                observations.append(np.asarray(obs, dtype=np.float32))
-                actions.append(np.asarray(action, dtype=np.float32))
-                residual_actions.append(np.asarray(residual_action, dtype=np.float32))
-                prior_actions.append(np.asarray(prior_action, dtype=np.float32))
-                next_observations.append(np.asarray(next_obs, dtype=np.float32))
-                rewards.append(float(reward))
-                dones.append(done)
-                scenario_names.append(str(scenario.get("name", "")))
                 metrics = {
                     "episode": float(episode + 1),
                     "step": float(steps + 1),
@@ -84,7 +79,19 @@ def collect_expert_dataset(
                 }
                 metrics.update(_flatten_numeric("action", next_info.get("action_metrics", {})))
                 metrics.update(_flatten_numeric("reward", next_info.get("reward_components", {})))
-                step_metrics.append(metrics)
+                raw_step_metrics.append(metrics)
+                if skip_unsafe and bool(next_info.get("unsafe", False)):
+                    skipped_unsafe += 1
+                else:
+                    observations.append(np.asarray(obs, dtype=np.float32))
+                    actions.append(np.asarray(action, dtype=np.float32))
+                    residual_actions.append(np.asarray(residual_action, dtype=np.float32))
+                    prior_actions.append(np.asarray(prior_action, dtype=np.float32))
+                    next_observations.append(np.asarray(next_obs, dtype=np.float32))
+                    rewards.append(float(reward))
+                    dones.append(done)
+                    scenario_names.append(str(scenario.get("name", "")))
+                    step_metrics.append(metrics)
                 obs, info = next_obs, next_info
                 steps += 1
         finally:
@@ -119,11 +126,15 @@ def collect_expert_dataset(
         "residual_prior": residual_prior,
         "episodes": int(episodes),
         "max_steps": max_steps,
+        "skip_unsafe": bool(skip_unsafe),
+        "raw_transitions": len(raw_step_metrics),
+        "skipped_unsafe": int(skipped_unsafe),
         "transitions": len(observations),
         "obs_dim": int(observations[0].shape[0]),
         "act_dim": int(actions[0].shape[0]),
         "scenarios": sorted(set(scenario_names)),
         "return_sum": float(np.sum(rewards)),
+        "raw_unsafe_fraction": float(np.mean([row.get("unsafe", 0.0) for row in raw_step_metrics])),
         "unsafe_fraction": float(np.mean([row.get("unsafe", 0.0) for row in step_metrics])),
     }
     manifest_path = out_path.with_suffix(".manifest.json")
@@ -140,6 +151,7 @@ def main():
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--residual-prior", default=None)
     parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--skip-unsafe", action="store_true", help="Drop expert transitions whose next state is marked unsafe.")
     args = parser.parse_args()
     config_path = Path(args.config)
     if not config_path.is_absolute():
@@ -155,6 +167,7 @@ def main():
         max_steps=args.max_steps,
         residual_prior=args.residual_prior,
         seed=args.seed,
+        skip_unsafe=args.skip_unsafe,
     )
     print(json.dumps(manifest, indent=2))
 

@@ -118,3 +118,31 @@ def shield_residual_action(residual_action: np.ndarray, env, info: dict, cfg: di
     elif soft_margin > hard_margin and margin < soft_margin:
         residual *= (margin - hard_margin) / max(soft_margin - hard_margin, 1e-6)
     return residual.astype(np.float32)
+
+
+def shield_policy_action(action: np.ndarray, env, info: dict, cfg: dict) -> np.ndarray:
+    safety_cfg = dict(cfg or {})
+    filtered = adapt_action_to_env(action, env).astype(np.float64)
+    force_limit = float(getattr(env, "force_limit", np.inf))
+    max_fraction = float(safety_cfg.get("max_action_fraction", 1.0))
+    if np.isfinite(force_limit) and max_fraction > 0.0:
+        filtered = np.clip(filtered, -max_fraction * force_limit, max_fraction * force_limit)
+
+    max_delta_fraction = safety_cfg.get("max_delta_fraction")
+    previous_action = getattr(env, "last_action", None)
+    if max_delta_fraction is not None and previous_action is not None and np.isfinite(force_limit):
+        previous = adapt_action_to_env(previous_action, env).astype(np.float64)
+        max_delta = max(0.0, float(max_delta_fraction)) * force_limit
+        filtered = np.clip(filtered, previous - max_delta, previous + max_delta)
+
+    if not safety_cfg.get("enabled", False):
+        return filtered.astype(np.float32)
+
+    margin = safety_margin(info)
+    hard_margin = float(safety_cfg.get("hard_margin", 0.0))
+    soft_margin = float(safety_cfg.get("soft_margin", hard_margin))
+    if margin <= hard_margin:
+        filtered *= 0.0
+    elif soft_margin > hard_margin and margin < soft_margin:
+        filtered *= (margin - hard_margin) / max(soft_margin - hard_margin, 1e-6)
+    return filtered.astype(np.float32)
