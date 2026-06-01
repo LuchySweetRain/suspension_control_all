@@ -557,3 +557,46 @@ Current paper-positioning update:
 - Key mechanism: PPO is penalized when sampled actions require strong actuator/safety projection before execution, reducing the distribution shift between policy likelihood and executed control.
 - Current full-matrix evidence: `bc_ppo` improves over `ppo_scratch` on return, unsafe steps, body/pitch/roll acceleration, action delta, actuator tracking, and projection error.
 - Residual RL is now a secondary extension. It should not be the central claim until the prior controller itself is competitive.
+
+## Current Robustness Gap and Algorithm Correction
+
+The repeated-seed checks show that the strongest current claim is promising but not finished:
+
+- Seed 42 e20 from `results/si_rppo_e20_projection_full_matrix` supports the core PPO claim.
+- Seed 43 failed in a short e10 probe but supports the claim when trained for e20 in `results/projection_seed43_e20_check`.
+- Seed 44 e20 in `results/projection_seed44_e20_check` exposes a failure mode: BC-PPO becomes very smooth and projection-consistent, but too passive, increasing unsafe steps.
+
+This changes the near-term algorithm from plain projection-aware PPO to:
+
+**Safety-curated imitation + projection-aware and unsafe-regularized online PPO.**
+
+The updated PPO actor objective includes two deployment-specific conservative terms:
+
+```text
+L_actor =
+    L_clip
+  + lambda_proj   * E[rho_t * projection_error_t]
+  + lambda_unsafe * E[rho_t * unsafe_t]
+  + lambda_delta  * E[rho_t * action_delta_t]
+```
+
+Where:
+
+- `projection_error_t` measures how much the sampled policy action had to be changed by the actuator/safety projection before execution.
+- `unsafe_t` is the next-state safety violation indicator logged from the active-suspension environment.
+- `action_delta_t` is the normalized executed-action change, tying the PPO update directly to actuator smoothness.
+- `lambda_proj` discourages policies that rely on hidden projection to become feasible.
+- `lambda_unsafe` discourages action likelihood on samples that lead to safety-limit violations, addressing the seed 44 passive-controller failure.
+- `lambda_delta` prevents unsafe regularization from solving safety by producing rough or actuator-hostile active forces.
+
+Implementation status:
+
+- Done: `rl/ppo.py` supports `unsafe_penalty_weight`.
+- Done: `scripts/train_rl.py` records trajectory-level `unsafe` flags and training-history `unsafe_fraction`.
+- Done: `rl/ppo.py` supports `action_delta_penalty_weight`.
+- Done: `scripts/train_rl.py` records trajectory-level normalized executed-action delta and training-history `mean_action_delta`.
+- Done: `configs/mujoco_full_car_safe_ppo.yaml` enables `unsafe_penalty_weight` for the PPO-centered method.
+- Done: `configs/mujoco_full_car_safe_ppo.yaml` enables `action_delta_penalty_weight` for the PPO-centered method.
+- Done: `run_si_rppo_ablation.py` sets projection, unsafe, and action-delta penalties to zero for `ppo_scratch`, preserving a standard PPO baseline.
+- Current evidence: fixed unsafe/action-delta coefficients improve seed 44 safety and return but still fail the full comfort/smoothness/projection claim.
+- Next: replace fixed coefficients with adaptive constraint weighting or a Lagrangian PPO variant, then re-run `run_projection_seed_sweep.py` with `--seeds 42,43,44 --episodes 20` and require all seeds to support `projection_aware_imitation` before claiming robust superiority.

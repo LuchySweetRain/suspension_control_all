@@ -26,7 +26,13 @@ VARIANTS = {
         "residual_control": {"enabled": False},
         "imitation": {"enabled": False},
         "evaluation": {"controllers": ["PASSIVE", "FULL_CAR_MPC_LITE"]},
-        "rl": {"ppo": {"projection_penalty_weight": 0.0}},
+        "rl": {
+            "ppo": {
+                "projection_penalty_weight": 0.0,
+                "unsafe_penalty_weight": 0.0,
+                "action_delta_penalty_weight": 0.0,
+            }
+        },
         "reward": {"deviation": 0.0},
     },
     "bc_ppo": {

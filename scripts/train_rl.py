@@ -395,8 +395,19 @@ def train_ppo(agent: PPOAgent, config: dict, run_dir: Path, episodes: int):
         if prior is not None:
             prior.reset()
         done = False
-        trajectory = {"obs": [], "act": [], "logp": [], "rew": [], "value": [], "done": [], "projection_error": []}
+        trajectory = {
+            "obs": [],
+            "act": [],
+            "logp": [],
+            "rew": [],
+            "value": [],
+            "done": [],
+            "projection_error": [],
+            "unsafe": [],
+            "action_delta": [],
+        }
         ep_return = 0.0
+        last_executed_action = None
         while not done:
             residual_action, logp, value = agent.act_for_training(obs)
             if residual_enabled:
@@ -416,6 +427,19 @@ def train_ppo(agent: PPOAgent, config: dict, run_dir: Path, episodes: int):
             projection_error = float(
                 np.sqrt(np.mean(np.square((np.asarray(action) - raw_policy_action) / max(float(env.force_limit), 1e-6))))
             )
+            if last_executed_action is None:
+                action_delta = 0.0
+            else:
+                action_delta = float(
+                    np.sqrt(
+                        np.mean(
+                            np.square(
+                                (np.asarray(action, dtype=np.float32) - last_executed_action)
+                                / max(float(env.force_limit), 1e-6)
+                            )
+                        )
+                    )
+                )
             step_action = {"action": action, "prior_action": prior_action} if residual_enabled else action
             next_obs, reward, terminated, truncated, next_info = env.step(step_action)
             done = terminated or truncated
@@ -426,6 +450,9 @@ def train_ppo(agent: PPOAgent, config: dict, run_dir: Path, episodes: int):
             trajectory["value"].append(value)
             trajectory["done"].append(done)
             trajectory["projection_error"].append(projection_error)
+            trajectory["unsafe"].append(float(bool(next_info.get("unsafe", False))))
+            trajectory["action_delta"].append(action_delta)
+            last_executed_action = np.asarray(action, dtype=np.float32).copy()
             obs = next_obs
             info = next_info
             ep_return += reward
@@ -458,6 +485,8 @@ def train_ppo(agent: PPOAgent, config: dict, run_dir: Path, episodes: int):
             "actor_loss": actor_loss,
             "bc_anchor_weight": bc_anchor_weight,
             "mean_projection_error": float(np.mean(trajectory["projection_error"])) if trajectory["projection_error"] else 0.0,
+            "unsafe_fraction": float(np.mean(trajectory["unsafe"])) if trajectory["unsafe"] else 0.0,
+            "mean_action_delta": float(np.mean(trajectory["action_delta"])) if trajectory["action_delta"] else 0.0,
             "eval_mean_return": None,
         }
         if eval_every > 0 and (episode + 1) % eval_every == 0:

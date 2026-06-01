@@ -27,3 +27,5 @@ rl:
     entropy_coef: 0.0005
     value_coef: 0.5
     projection_penalty_weight: 0.2
+    unsafe_penalty_weight: 1.0
+    action_delta_penalty_weight: 0.4

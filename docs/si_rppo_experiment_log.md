@@ -250,3 +250,65 @@ Interpretation:
 - SAC remains close in return and safety, but BC-PPO has lower body/pitch/roll accelerations, lower action delta, lower actuator tracking error, and lower projection error in this matrix.
 - Residual learning with the current `FULL_CAR_MPC_LITE` prior is not the best main-claim route. It should be reframed as a secondary extension or postponed until the reduced MPC/LPV prior improves.
 - The next CCFA-strengthening step is repeated-seed or held-out-road validation of the `projection_aware_imitation` claim.
+
+## 2026-06-01: Projection-Aware Seed Sweep and Safety-Regularized PPO
+
+Commands:
+
+```text
+python scripts/run_projection_seed_sweep.py --config configs/mujoco_full_car_safe_ppo.yaml --out results/projection_seed_sweep_e10 --seeds 42,43,44 --episodes 10 --expert-episodes 10
+python scripts/run_projection_seed_sweep.py --config configs/mujoco_full_car_safe_ppo.yaml --out results/projection_seed43_e20_check --seeds 43 --episodes 20 --expert-episodes 20
+python scripts/run_projection_seed_sweep.py --config configs/mujoco_full_car_safe_ppo.yaml --out results/projection_seed44_e20_check --seeds 44 --episodes 20 --expert-episodes 20
+```
+
+Evidence summary:
+
+| Run | Supported Seeds | Status | Key Observation |
+| --- | ---: | --- | --- |
+| `projection_seed_sweep_e10` | 2 / 3 | `needs_more_evidence` | Seeds 42 and 44 supported; seed 43 was unstable under a short 10-episode budget. |
+| `projection_seed43_e20_check` | 1 / 1 | `supported` | Seed 43 becomes supported at 20 episodes, improving return, unsafe steps, action smoothness, tracking, and projection error. |
+| `projection_seed44_e20_check` | 0 / 1 | `needs_more_evidence` | BC-PPO improves comfort, action smoothness, tracking, and projection error, but worsens return and unsafe steps. |
+
+Seed 44 e20 core comparison:
+
+| Variant | Return | UnsafeSteps | BodyAccRMS | PitchAccRMS | RollAccRMS | ActionDeltaRMS | TrackingRMS | ProjectionError |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| ppo_scratch | -13478.2070 | 114.0 | 2.8986 | 3.8833 | 3.2651 | 95.5528 | 142.5772 | 0.3261 |
+| bc_ppo | -17939.6776 | 296.2 | 2.5759 | 3.3103 | 0.2617 | 3.5283 | 5.2647 | 0.0331 |
+
+Interpretation:
+
+- Repeated-seed evidence is not yet strong enough for a final CCFA-level robustness claim.
+- The failure mode is informative: safe-teacher BC-PPO can become extremely smooth and projection-consistent, but too passive on some seeds/roads, causing safety degradation from insufficient active force.
+- The algorithmic correction is to make safety violations explicit in the PPO update, not only in the environment reward. PPO trajectories now record per-step `unsafe` flags, and the actor objective supports `unsafe_penalty_weight * ratio * unsafe`.
+- `ppo_scratch` keeps this weight at zero in ablation configs so it remains a standard PPO baseline; imitation-initialized PPO receives both projection and unsafe-transition regularization.
+
+Follow-up regression:
+
+```text
+python scripts/run_projection_seed_sweep.py --config configs/mujoco_full_car_safe_ppo.yaml --out results/projection_seed44_e20_unsafe_regularized --seeds 44 --episodes 20 --expert-episodes 20
+```
+
+Unsafe regularization reduced seed 44 BC-PPO unsafe steps from `296.2` to `40.2` and improved return from `-17939.6776` to `-12318.1044`, beating PPO scratch on both return and unsafe steps. However, action delta, actuator tracking, and roll RMS became worse than scratch. This means the next objective must jointly penalize unsafe likelihood and actuator roughness.
+
+Implemented correction:
+
+- PPO trajectories now also record normalized executed-action delta.
+- PPO supports `action_delta_penalty_weight * ratio * action_delta`.
+- `configs/mujoco_full_car_safe_ppo.yaml` enables this smoothness penalty for the proposed method.
+- `ppo_scratch` keeps projection, unsafe, and action-delta penalties at zero in ablation configs so it remains a standard PPO baseline.
+
+Constraint-regularized regression:
+
+```text
+python scripts/run_projection_seed_sweep.py --config configs/mujoco_full_car_safe_ppo.yaml --out results/projection_seed44_e20_constraint_regularized --seeds 44 --episodes 20 --expert-episodes 20
+```
+
+This version further reduced seed 44 unsafe steps to `8.2` and improved return to `-11892.9002`, but it still failed the full core claim because body/pitch comfort, action delta, tracking error, and projection error were worse than PPO scratch. The active-suspension tradeoff is now explicit: the method can become safe, but not yet simultaneously safe, smooth, and projection-consistent on the hard seed.
+
+Next algorithm step:
+
+- Treat seed 44 as the main hard-case benchmark.
+- Tune or adapt the constraint weights instead of using fixed global coefficients, e.g. increase `lambda_delta` only when unsafe rate is already below target, or use a Lagrangian update for `lambda_unsafe`, `lambda_delta`, and `lambda_proj`.
+- Add held-out road-condition labels to identify whether this failure is caused by a particular road/scenario rather than seed stochasticity alone.
+- Re-run the 3-seed e20 sweep after adaptive constraint weighting. The acceptance criterion is that `projection_aware_imitation` is supported on all planned seeds, or that any unsupported seed has a reproducible, diagnosable road-condition failure.

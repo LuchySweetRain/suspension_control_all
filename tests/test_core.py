@@ -28,6 +28,7 @@ from scripts.collect_env_statistics import collect_env_statistics
 from scripts.collect_expert_dataset import collect_expert_dataset
 from scripts.run_mujoco_benchmark import run_benchmark
 from scripts.run_mujoco_robustness_matrix import run_robustness_matrix
+from scripts.run_projection_seed_sweep import run_projection_seed_sweep
 from scripts.run_si_rppo_ablation import build_claim_report, run_si_rppo_ablation
 from scripts.summarize_benchmark import build_report
 from scripts.train_rl import ScenarioSampler
@@ -201,6 +202,34 @@ def test_ppo_advantage_finish_shapes():
     assert len(advantages) == 2
     assert np.all(np.isfinite(returns))
     assert np.all(np.isfinite(advantages))
+
+
+def test_ppo_unsafe_penalty_accepts_trajectory_flags():
+    c = cfg()
+    c["rl"]["ppo"] = {
+        "train_epochs": 1,
+        "minibatch_size": 2,
+        "projection_penalty_weight": 0.1,
+        "unsafe_penalty_weight": 0.5,
+        "action_delta_penalty_weight": 0.25,
+    }
+    ppo_cfg = PPOConfig.from_project_config(c)
+    agent = PPOAgent(ppo_cfg, torch.device("cpu"))
+    trajectory = {
+        "obs": np.zeros((2, ppo_cfg.obs_dim), dtype=np.float32),
+        "act": np.zeros((2, ppo_cfg.act_dim), dtype=np.float32),
+        "logp": [0.0, 0.0],
+        "ret": [0.0, -1.0],
+        "adv": [0.5, -0.5],
+        "projection_error": [0.0, 0.2],
+        "unsafe": [0.0, 1.0],
+        "action_delta": [0.0, 0.1],
+    }
+    value_loss, actor_loss = agent.train_trajectory(trajectory)
+    assert np.isfinite(value_loss)
+    assert np.isfinite(actor_loss)
+    assert ppo_cfg.unsafe_penalty_weight == 0.5
+    assert ppo_cfg.action_delta_penalty_weight == 0.25
 
 
 def test_mujoco_half_car_env_render_smoke():
@@ -716,7 +745,11 @@ def test_si_rppo_ablation_dry_run_writes_variants(tmp_path):
     bc_cfg = load_config(Path(manifest["variants"]["bc_ppo"]["config"]))
     scratch_cfg = load_config(Path(manifest["variants"]["ppo_scratch"]["config"]))
     assert scratch_cfg["rl"]["ppo"]["projection_penalty_weight"] == 0.0
+    assert scratch_cfg["rl"]["ppo"]["unsafe_penalty_weight"] == 0.0
+    assert scratch_cfg["rl"]["ppo"]["action_delta_penalty_weight"] == 0.0
     assert bc_cfg["rl"]["ppo"]["projection_penalty_weight"] > 0.0
+    assert bc_cfg["rl"]["ppo"]["unsafe_penalty_weight"] > 0.0
+    assert bc_cfg["rl"]["ppo"]["action_delta_penalty_weight"] > 0.0
     assert not residual_cfg["imitation"]["anchor_enabled"]
     assert not residual_cfg["residual_control"]["shield"]["enabled"]
     assert not safe_cfg["imitation"]["anchor_enabled"]
@@ -826,6 +859,31 @@ def test_si_rppo_claim_report_detects_supported_ablation(tmp_path):
     assert statuses["safe_residual_ppo_vs_sac"] == "supported"
     assert Path(report["json_path"]).is_file()
     assert Path(report["markdown_path"]).is_file()
+
+
+def test_projection_seed_sweep_dry_run(tmp_path):
+    summary = run_projection_seed_sweep(
+        base_config_path=ROOT / "configs" / "mujoco_full_car_safe_ppo.yaml",
+        out_dir=tmp_path / "seed_sweep",
+        seeds=[42, 43],
+        episodes=1,
+        expert_episodes=1,
+        expert_max_steps=2,
+        train_scenario_limit=1,
+        eval_scenario_limit=1,
+        episode_seconds=0.05,
+        mujoco_settle_seconds=0.2,
+        dry_run=True,
+    )
+    assert summary["dry_run"]
+    assert summary["seed_count"] == 2
+    assert summary["supported_seeds"] == 0
+    assert Path(summary["json_path"]).is_file()
+    assert Path(summary["csv_path"]).is_file()
+    assert Path(summary["markdown_path"]).is_file()
+    for seed in (42, 43):
+        assert (tmp_path / "seed_sweep" / f"seed_{seed}" / "seed_config.yaml").is_file()
+        assert (tmp_path / "seed_sweep" / f"seed_{seed}" / "ablation" / "si_rppo_ablation_manifest.json").is_file()
 
 
 def test_preflight_mujoco_training_smoke(tmp_path):
