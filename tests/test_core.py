@@ -591,9 +591,14 @@ def test_residual_gate_and_deviation_reward_smoke():
     gate_noisy = residual_gate(noisy_info, cfg)
     prior = np.zeros(env.action_space.shape, dtype=np.float32)
     action = np.full(env.action_space.shape, 100.0, dtype=np.float32)
+    _, _, _, _, no_prior_info = env.step(action)
+    assert not no_prior_info["has_prior_action"]
+    assert no_prior_info["action_metrics"]["deviation_rms"] == 0.0
+    assert no_prior_info["reward_components"]["deviation"] == 0.0
     _, reward, _, _, info = env.step({"action": action, "prior_action": prior})
     env.close()
     assert gate_noisy < gate_nominal
+    assert info["has_prior_action"]
     assert np.allclose(info["prior_action"], prior)
     assert info["action_metrics"]["deviation_rms"] > 0.0
     assert info["reward_components"]["deviation"] > 0.0

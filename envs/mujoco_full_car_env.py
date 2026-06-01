@@ -125,6 +125,7 @@ class MuJoCoFullCarEnv(gym.Env if gym is not None else object):
         self.last_command = np.zeros(self.act_dim, dtype=np.float64)
         self.last_action = np.zeros(self.act_dim, dtype=np.float64)
         self.last_prior_action = np.zeros(self.act_dim, dtype=np.float64)
+        self.has_prior_action = False
         self.prev_command = np.zeros(self.act_dim, dtype=np.float64)
         self.prev_action = np.zeros(self.act_dim, dtype=np.float64)
         self.last_corner_command = np.zeros(4, dtype=np.float64)
@@ -177,6 +178,7 @@ class MuJoCoFullCarEnv(gym.Env if gym is not None else object):
         self.last_command = np.zeros(self.act_dim, dtype=np.float64)
         self.last_action = np.zeros(self.act_dim, dtype=np.float64)
         self.last_prior_action = np.zeros(self.act_dim, dtype=np.float64)
+        self.has_prior_action = False
         self.prev_command = np.zeros(self.act_dim, dtype=np.float64)
         self.prev_action = np.zeros(self.act_dim, dtype=np.float64)
         self.last_corner_command = np.zeros(4, dtype=np.float64)
@@ -209,11 +211,13 @@ class MuJoCoFullCarEnv(gym.Env if gym is not None else object):
             raise ValueError(f"Expected action shape {(self.act_dim,)}, got {action.shape}")
         if prior_action is None:
             self.last_prior_action = np.zeros(self.act_dim, dtype=np.float64)
+            self.has_prior_action = False
         else:
             prior = np.clip(np.asarray(prior_action, dtype=np.float64), -self.force_limit, self.force_limit)
             if prior.shape != (self.act_dim,):
                 raise ValueError(f"Expected prior_action shape {(self.act_dim,)}, got {prior.shape}")
             self.last_prior_action = prior
+            self.has_prior_action = True
         self.prev_command = self.last_command.copy()
         self.prev_action = self.last_action.copy()
         self.last_command = action
@@ -648,7 +652,11 @@ class MuJoCoFullCarEnv(gym.Env if gym is not None else object):
         command_delta = float(np.sum(np.square((self.last_command - self.prev_command) / self.force_limit)))
         actuator_tracking = float(np.sum(np.square((self.last_command - self.last_action) / self.force_limit)))
         saturation = float(np.mean(np.isclose(np.abs(self.last_action), self.force_limit, rtol=0.0, atol=1e-6)))
-        deviation = float(np.sum(np.square((self.last_command - self.last_prior_action) / self.force_limit)))
+        deviation = (
+            float(np.sum(np.square((self.last_command - self.last_prior_action) / self.force_limit)))
+            if self.has_prior_action
+            else 0.0
+        )
         power = 0.0
         for value, c in zip(self.last_corner_action, ("fl", "fr", "rl", "rr")):
             power += abs(float(value) * d[f"delta_dy_{c}"])
@@ -728,6 +736,7 @@ class MuJoCoFullCarEnv(gym.Env if gym is not None else object):
             "action": self.last_action.copy(),
             "corner_action": self.last_corner_action.copy(),
             "prior_action": self.last_prior_action.copy(),
+            "has_prior_action": bool(self.has_prior_action),
             "action_metrics": {
                 "action_delta": action_delta.copy(),
                 "command_delta": command_delta.copy(),
@@ -736,7 +745,11 @@ class MuJoCoFullCarEnv(gym.Env if gym is not None else object):
                 "command_delta_rms": float(np.sqrt(np.mean(np.square(command_delta)))) if command_delta.size else 0.0,
                 "actuator_tracking_rms": float(np.sqrt(np.mean(np.square(tracking_error)))) if tracking_error.size else 0.0,
                 "saturation_ratio": float(np.mean(saturation_mask)) if saturation_mask.size else 0.0,
-                "deviation_rms": float(np.sqrt(np.mean(np.square(self.last_command - self.last_prior_action)))),
+                "deviation_rms": (
+                    float(np.sqrt(np.mean(np.square(self.last_command - self.last_prior_action))))
+                    if self.has_prior_action
+                    else 0.0
+                ),
                 "force_limit": float(self.force_limit),
             },
             "actuator": {
