@@ -59,6 +59,8 @@ CLAIM_METRICS = [
     "ActuatorTrackingRMS_N",
     "ActuatorSaturationRatio",
     "ActionDeviationRMS_N",
+    "PolicyProjectionError",
+    "PolicyProjectionDeltaRMS_N",
 ]
 
 LOWER_IS_BETTER = {
@@ -71,6 +73,8 @@ LOWER_IS_BETTER = {
     "ActuatorTrackingRMS_N",
     "ActuatorSaturationRatio",
     "ActionDeviationRMS_N",
+    "PolicyProjectionError",
+    "PolicyProjectionDeltaRMS_N",
 }
 
 
@@ -131,10 +135,10 @@ def _summarize_metrics(metrics: pd.DataFrame) -> dict:
     for controller in metrics["Controller"].unique():
         view = metrics[metrics["Controller"] == controller]
         view_numeric = view[numeric.columns.intersection(view.columns)]
-        out[str(controller)] = {
-            key: float(value)
-            for key, value in view_numeric.mean(numeric_only=True).to_dict().items()
-        }
+        out[str(controller)] = {}
+        for key, value in view_numeric.mean(numeric_only=True).to_dict().items():
+            if pd.notna(value):
+                out[str(controller)][key] = float(value)
     return out
 
 
@@ -160,6 +164,25 @@ def _metric_delta(metric: str, candidate: float, baseline: float) -> dict:
 def build_claim_report(combined: pd.DataFrame, out_dir: Path) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     comparisons = [
+        {
+            "name": "projection_aware_imitation",
+            "candidate": "bc_ppo",
+            "baseline": "ppo_scratch",
+            "claim": "Safe-teacher behavior cloning with projection-aware PPO should outperform standard PPO under the same learned-policy safety projection.",
+            "required_metrics": [
+                "EpisodeReturn",
+                "UnsafeSteps",
+                "BodyAccRMS_mps2",
+                "PitchAccRMS_radps2",
+                "RollAccRMS_radps2",
+                "ActionDeltaRMS_N",
+                "ActuatorTrackingRMS_N",
+                "ActuatorSaturationRatio",
+                "PolicyProjectionError",
+            ],
+            "required_improvements": ["EpisodeReturn", "UnsafeSteps", "ActionDeltaRMS_N"],
+            "max_worsened_metrics": 1,
+        },
         {
             "name": "imitation_initialization",
             "candidate": "bc_ppo",
@@ -286,6 +309,10 @@ def build_claim_report(combined: pd.DataFrame, out_dir: Path) -> dict:
             )
         report = {
             "status": "ready" if all(r["status"] != "missing_variant" for r in comparison_results) else "incomplete",
+            "core_status": next(
+                (r["status"] for r in comparison_results if r.get("name") == "projection_aware_imitation"),
+                "missing_data",
+            ),
             "controller": "PPO",
             "metric_direction": {
                 "higher_is_better": ["EpisodeReturn"],
@@ -302,6 +329,7 @@ def build_claim_report(combined: pd.DataFrame, out_dir: Path) -> dict:
         "# SI-RPPO Claim Evidence Report",
         "",
         f"- Status: `{report['status']}`",
+        f"- Core PPO claim status: `{report.get('core_status', report['status'])}`",
         "- Controller compared: `PPO`",
         "",
         "## Interpretation Rules",
@@ -541,6 +569,7 @@ def run_si_rppo_ablation(
         "combined_metrics": str(combined_path.resolve()),
         "claim_report": {
             "status": claim_report["status"],
+            "core_status": claim_report.get("core_status", claim_report["status"]),
             "json": claim_report["json_path"],
             "markdown": claim_report["markdown_path"],
         },

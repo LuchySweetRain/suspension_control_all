@@ -729,6 +729,7 @@ def test_si_rppo_ablation_dry_run_writes_variants(tmp_path):
         assert report["planned_train_command"]
     assert Path(manifest["combined_metrics"]).is_file()
     assert manifest["claim_report"]["status"] == "missing_data"
+    assert manifest["claim_report"]["core_status"] == "missing_data"
     assert Path(manifest["claim_report"]["json"]).is_file()
     assert Path(manifest["claim_report"]["markdown"]).is_file()
 
@@ -817,6 +818,7 @@ def test_si_rppo_claim_report_detects_supported_ablation(tmp_path):
     report = build_claim_report(pd.DataFrame(rows), tmp_path)
     assert report["status"] == "ready"
     statuses = {item["name"]: item["status"] for item in report["comparisons"]}
+    assert statuses["projection_aware_imitation"] == "supported"
     assert statuses["imitation_initialization"] == "supported"
     assert statuses["residual_prior_structure"] == "supported"
     assert statuses["safe_residual_gate"] == "supported"

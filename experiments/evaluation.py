@@ -81,13 +81,28 @@ class PolicySafetyController:
         self.env = env
         self.cfg = dict(cfg)
         self.has_prior_action = bool(getattr(controller, "has_prior_action", False))
+        self.last_raw_action = np.zeros(env.action_space.shape, dtype=np.float32)
+        self.last_projected_action = np.zeros(env.action_space.shape, dtype=np.float32)
+        self.last_projection_error = 0.0
+        self.last_projection_delta_rms = 0.0
 
     def reset(self):
         self.controller.reset()
+        self.last_raw_action = np.zeros(self.env.action_space.shape, dtype=np.float32)
+        self.last_projected_action = np.zeros(self.env.action_space.shape, dtype=np.float32)
+        self.last_projection_error = 0.0
+        self.last_projection_delta_rms = 0.0
 
     def compute_action(self, obs, info):
         action = self.controller.compute_action(obs, info)
-        return shield_policy_action(action, self.env, info, self.cfg)
+        projected = shield_policy_action(action, self.env, info, self.cfg)
+        self.last_raw_action = adapt_action_to_env(action, self.env)
+        self.last_projected_action = adapt_action_to_env(projected, self.env)
+        delta = self.last_projected_action - self.last_raw_action
+        force_limit = max(float(getattr(self.env, "force_limit", 1.0)), 1e-6)
+        self.last_projection_delta_rms = float(np.sqrt(np.mean(np.square(delta))))
+        self.last_projection_error = float(self.last_projection_delta_rms / force_limit)
+        return projected
 
     def prior_action(self, obs, info):
         if self.has_prior_action and hasattr(self.controller, "prior_action"):
@@ -212,6 +227,9 @@ def rollout(env: HalfCarEnv, controller, use_preview: bool) -> dict:
         for metric_name, value in info.get("action_metrics", {}).items():
             if np.isscalar(value):
                 row[f"action_{metric_name}"] = float(value)
+        if hasattr(controller, "last_projection_error"):
+            row["policy_projection_error"] = float(controller.last_projection_error)
+            row["policy_projection_delta_rms"] = float(controller.last_projection_delta_rms)
         for component_name, value in info.get("reward_components", {}).items():
             row[f"reward_{component_name}"] = float(value)
         if "ddroll" in d:
@@ -261,6 +279,8 @@ def compute_metrics(df: pd.DataFrame, settle_seconds: float = 1.0) -> dict:
         "action_actuator_tracking_rms",
         "action_saturation_ratio",
         "action_deviation_rms",
+        "policy_projection_error",
+        "policy_projection_delta_rms",
     ):
         if column in df.columns:
             label = {
@@ -269,6 +289,8 @@ def compute_metrics(df: pd.DataFrame, settle_seconds: float = 1.0) -> dict:
                 "action_actuator_tracking_rms": "ActuatorTrackingRMS_N",
                 "action_saturation_ratio": "ActuatorSaturationRatio",
                 "action_deviation_rms": "ActionDeviationRMS_N",
+                "policy_projection_error": "PolicyProjectionError",
+                "policy_projection_delta_rms": "PolicyProjectionDeltaRMS_N",
             }[column]
             metrics[label] = float(view[column].mean())
     for column in [name for name in df.columns if name.startswith("reward_")]:

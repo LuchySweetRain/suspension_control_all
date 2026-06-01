@@ -190,3 +190,63 @@ This run uses standard PPO scratch with the safety layer but without projection 
 | bc_ppo | PPO | -3213.2397 | 0.0 | 0.4466 | 2.8124 | 0.1422 | 80.2526 | 119.7474 |
 
 This is the strongest current result for the PPO-centered paper direction. It supports the claim that safe offline imitation plus projection-aware PPO fine-tuning can strongly improve early online safety, return, comfort, and action smoothness over standard PPO under the same action-safety layer.
+
+## 2026-06-01: Core PPO Claim With Projection Metrics
+
+Command:
+
+```text
+python scripts/run_si_rppo_ablation.py --config configs/mujoco_full_car_safe_ppo.yaml --out results/si_rppo_e20_projection_core_metrics --episodes 20 --expert-episodes 20 --expert-controller PASSIVE --skip-unsafe-expert --variants ppo_scratch,bc_ppo
+```
+
+Report status:
+
+- Overall report: `incomplete`, because residual and off-policy branches were intentionally not included.
+- Core PPO claim: `supported`.
+- New projection metrics are written as `PolicyProjectionError` and `PolicyProjectionDeltaRMS_N`.
+
+Core PPO comparison:
+
+| Variant | Controller | Return | UnsafeSteps | BodyAccRMS | PitchAccRMS | RollAccRMS | ActionDeltaRMS | TrackingRMS | ProjectionError | ProjectionDeltaRMS |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| ppo_scratch | PPO | -9962.1158 | 21.0 | 2.4933 | 5.2429 | 3.8918 | 169.1610 | 252.4103 | 0.4804 | 2402.1286 |
+| bc_ppo | PPO | -3213.2397 | 0.0 | 0.4466 | 2.8124 | 0.1422 | 80.2526 | 119.7474 | 0.1926 | 962.8655 |
+
+Interpretation:
+
+- The core PPO claim is now explicitly captured by the automatic claim report as `projection_aware_imitation`.
+- Safe-teacher BC plus projection-aware PPO improves all required core metrics over standard PPO: return, unsafe steps, body/pitch/roll comfort, action delta, actuator tracking, and projection error.
+- This is the current best CCFA-level algorithm seed: the novelty is not PPO itself, but a safety-curated offline-to-online PPO update that penalizes reliance on action projection in an active-suspension actuator-constrained setting.
+
+## 2026-06-01: Projection-Aware Full Matrix
+
+Command:
+
+```text
+python scripts/run_si_rppo_ablation.py --config configs/mujoco_full_car_safe_ppo.yaml --out results/si_rppo_e20_projection_full_matrix --episodes 20 --expert-episodes 20 --expert-controller PASSIVE --skip-unsafe-expert --baseline-algorithms td3,sac
+```
+
+Report status:
+
+- Overall report: `ready`.
+- Core PPO claim: `supported`.
+- Residual-prior and safe-residual claims: weak or contradicted.
+- TD3/SAC comparisons remain useful baselines, but they do not currently displace the PPO-centered core claim.
+
+Mean learned-controller metrics:
+
+| Variant | Controller | Return | UnsafeSteps | BodyAccRMS | PitchAccRMS | RollAccRMS | ActionDeltaRMS | TrackingRMS | ProjectionError | DeviationRMS |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| ppo_scratch | PPO | -9962.1158 | 21.0 | 2.4933 | 5.2429 | 3.8918 | 169.1610 | 252.4103 | 0.4804 | 0.0000 |
+| bc_ppo | PPO | -3213.2397 | 0.0 | 0.4466 | 2.8124 | 0.1422 | 80.2526 | 119.7474 | 0.1926 | 0.0000 |
+| residual_bc_ppo | PPO | -8953.1051 | 8.6 | 3.3001 | 4.5031 | 0.6209 | 116.8130 | 174.3002 | 0.2013 | 1773.5502 |
+| safe_residual_bc_ppo | PPO | -11950.7542 | 7.0 | 4.3437 | 5.2310 | 0.1478 | 136.8291 | 204.1669 | 0.3335 | 1725.7285 |
+| td3_baseline | TD3 | -19406.2439 | 301.0 | 1.0131 | 2.8833 | 1.1454 | 0.0000 | 0.0000 | 0.0399 | 0.0000 |
+| sac_baseline | SAC | -3307.5951 | 0.0 | 0.8409 | 2.9693 | 0.5187 | 151.9442 | 226.7207 | 0.2888 | 0.0000 |
+
+Interpretation:
+
+- The PPO-centered contribution is now the strongest thread: safe-teacher BC plus projection-aware PPO beats standard PPO on return, unsafe steps, comfort, action smoothness, actuator tracking, and projection reliance.
+- SAC remains close in return and safety, but BC-PPO has lower body/pitch/roll accelerations, lower action delta, lower actuator tracking error, and lower projection error in this matrix.
+- Residual learning with the current `FULL_CAR_MPC_LITE` prior is not the best main-claim route. It should be reframed as a secondary extension or postponed until the reduced MPC/LPV prior improves.
+- The next CCFA-strengthening step is repeated-seed or held-out-road validation of the `projection_aware_imitation` claim.

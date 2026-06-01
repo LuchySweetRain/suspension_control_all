@@ -544,4 +544,16 @@ This run makes `residual_prior_structure` supported again and shows that policy 
 - optionally down-weight or clip advantages for samples whose executed action differs strongly from the sampled policy action,
 - evaluate whether this turns `imitation_initialization` and `safe_residual_gate` from weak to supported.
 
-The focused `results/si_rppo_e20_projection_bc_focus` run already supports the PPO-centered core claim: standard PPO scratch with the same safety layer reached return `-9962.1158` with `21.0` unsafe steps, while safe-teacher BC plus projection-aware PPO reached return `-3213.2397` with `0.0` unsafe steps and lower action delta. This should become the near-term main paper story. Residual RL remains a secondary extension until the prior controller is improved or replaced.
+The focused `results/si_rppo_e20_projection_core_metrics` run supports the PPO-centered core claim with explicit projection metrics. Standard PPO scratch with the same safety layer reached return `-9962.1158`, `21.0` unsafe steps, action delta `169.1610`, and projection error `0.4804`; safe-teacher BC plus projection-aware PPO reached return `-3213.2397`, `0.0` unsafe steps, action delta `80.2526`, and projection error `0.1926`. This should become the near-term main paper story. Residual RL remains a secondary extension until the prior controller is improved or replaced.
+
+Next evidence step:
+
+- Done: `results/si_rppo_e20_projection_full_matrix` runs the full PPO/residual/off-policy matrix with the updated core claim report. Overall report status is `ready`; `projection_aware_imitation` is `supported`; residual-prior and safe-residual claims remain weak.
+- Next: treat the PPO-centered claim as publishable only if `projection_aware_imitation` remains supported across repeated seeds or held-out road scenarios.
+
+Current paper-positioning update:
+
+- Main algorithm: safety-curated offline imitation plus projection-aware online PPO.
+- Key mechanism: PPO is penalized when sampled actions require strong actuator/safety projection before execution, reducing the distribution shift between policy likelihood and executed control.
+- Current full-matrix evidence: `bc_ppo` improves over `ppo_scratch` on return, unsafe steps, body/pitch/roll acceleration, action delta, actuator tracking, and projection error.
+- Residual RL is now a secondary extension. It should not be the central claim until the prior controller itself is competitive.
