@@ -16,6 +16,7 @@ DEFAULT_METRICS = [
     "ActionDeltaRMS_N",
     "ActuatorTrackingRMS_N",
     "PolicyProjectionError",
+    "PolicyImprovementGate",
 ]
 
 
@@ -46,7 +47,7 @@ def _read_full_matrix(path: Path) -> pd.DataFrame:
 
 def _write_markdown(seed_df: pd.DataFrame, matrix_df: pd.DataFrame, out_path: Path) -> None:
     lines = [
-        "# Delta-Parameterized PPO Evidence Table",
+        "# Projection-Aware Safe PPO Evidence Table",
         "",
         "## Repeated Seed Core Claim",
         "",
@@ -79,8 +80,8 @@ def _write_markdown(seed_df: pd.DataFrame, matrix_df: pd.DataFrame, out_path: Pa
         "",
         "## Full Matrix Mean Metrics",
         "",
-        "| Variant | Controller | Return | Unsafe | Body | Pitch | Roll | ActionDelta | Tracking | ProjectionError |",
-        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Variant | Controller | Return | Unsafe | Body | Pitch | Roll | ActionDelta | Tracking | ProjectionError | Gate |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for _, row in matrix_df.sort_values(["Variant", "Controller"]).iterrows():
         lines.append(
@@ -97,6 +98,7 @@ def _write_markdown(seed_df: pd.DataFrame, matrix_df: pd.DataFrame, out_path: Pa
                     f"{row.get('ActionDeltaRMS_N', float('nan')):.4f}",
                     f"{row.get('ActuatorTrackingRMS_N', float('nan')):.4f}",
                     "" if pd.isna(row.get("PolicyProjectionError")) else f"{row.get('PolicyProjectionError'):.4f}",
+                    "" if pd.isna(row.get("PolicyImprovementGate")) else f"{row.get('PolicyImprovementGate'):.4f}",
                 ]
             )
             + " |"

@@ -184,3 +184,54 @@ def parameterize_policy_action(action: np.ndarray, env, info: dict, cfg: dict) -
     if np.isfinite(force_limit) and max_fraction > 0.0:
         action_out = np.clip(action_out, -max_fraction * force_limit, max_fraction * force_limit)
     return np.clip(action_out, env.action_space.low, env.action_space.high).astype(np.float32)
+
+
+def policy_improvement_gate(action: np.ndarray, env, info: dict, cfg: dict) -> tuple[np.ndarray, float]:
+    gate_cfg = dict(cfg or {})
+    filtered = adapt_action_to_env(action, env).astype(np.float64)
+    if not gate_cfg.get("enabled", False):
+        return filtered.astype(np.float32), 1.0
+
+    teacher = str(gate_cfg.get("teacher", "passive")).lower()
+    if teacher not in {"passive", "zero", "none"}:
+        raise ValueError("policy_improvement_gate.teacher currently supports passive/zero only")
+    teacher_action = np.zeros_like(filtered, dtype=np.float64)
+
+    preview = np.asarray(info.get("road_preview_clean", info.get("road_preview", [])), dtype=np.float64)
+    road_scale = max(float(getattr(env, "road_scale", 1.0)), 1e-6)
+    preview_rms = float(np.sqrt(np.mean(np.square(preview / road_scale)))) if preview.size else 0.0
+    preview_threshold = float(gate_cfg.get("preview_rms_threshold", 0.12))
+    preview_softness = max(float(gate_cfg.get("preview_rms_softness", 0.08)), 1e-6)
+    preview_gate = float(np.clip((preview_rms - preview_threshold) / preview_softness, 0.0, 1.0))
+
+    d = dict(info.get("derived", {}))
+    accel_signal = float(
+        np.sqrt(
+            d.get("ddzb", 0.0) ** 2
+            + float(gate_cfg.get("pitch_acc_scale", 0.2)) * d.get("ddtheta", 0.0) ** 2
+            + float(gate_cfg.get("roll_acc_scale", 0.2)) * d.get("ddroll", 0.0) ** 2
+        )
+    )
+    accel_threshold = float(gate_cfg.get("accel_threshold", 1.5))
+    accel_softness = max(float(gate_cfg.get("accel_softness", 2.0)), 1e-6)
+    accel_gate = float(np.clip((accel_signal - accel_threshold) / accel_softness, 0.0, 1.0))
+
+    demand_gate = max(preview_gate, accel_gate)
+    if gate_cfg.get("safety_margin_scale", True):
+        margin = safety_margin(info)
+        hard_margin = float(gate_cfg.get("hard_margin", 0.04))
+        soft_margin = float(gate_cfg.get("soft_margin", 0.2))
+        if margin <= hard_margin:
+            safety_gate = 0.0
+        elif soft_margin > hard_margin and margin < soft_margin:
+            safety_gate = (margin - hard_margin) / max(soft_margin - hard_margin, 1e-6)
+        else:
+            safety_gate = 1.0
+    else:
+        safety_gate = 1.0
+
+    min_scale = float(gate_cfg.get("min_scale", 0.0))
+    max_scale = float(gate_cfg.get("max_scale", 1.0))
+    scale = float(np.clip(min_scale + (max_scale - min_scale) * demand_gate * safety_gate, min_scale, max_scale))
+    blended = teacher_action + scale * (filtered - teacher_action)
+    return blended.astype(np.float32), scale

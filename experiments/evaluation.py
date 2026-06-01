@@ -13,6 +13,7 @@ from controllers.prior import (
     compute_prior_action,
     make_prior_controller,
     parameterize_policy_action,
+    policy_improvement_gate,
     residual_gate,
     shield_policy_action,
     shield_residual_action,
@@ -77,16 +78,25 @@ class ResidualController:
 
 
 class PolicySafetyController:
-    def __init__(self, controller, env, cfg: dict, action_parameterization_cfg: dict | None = None):
+    def __init__(
+        self,
+        controller,
+        env,
+        cfg: dict,
+        action_parameterization_cfg: dict | None = None,
+        improvement_gate_cfg: dict | None = None,
+    ):
         self.controller = controller
         self.env = env
         self.cfg = dict(cfg)
         self.action_parameterization_cfg = dict(action_parameterization_cfg or {})
+        self.improvement_gate_cfg = dict(improvement_gate_cfg or {})
         self.has_prior_action = bool(getattr(controller, "has_prior_action", False))
         self.last_raw_action = np.zeros(env.action_space.shape, dtype=np.float32)
         self.last_projected_action = np.zeros(env.action_space.shape, dtype=np.float32)
         self.last_projection_error = 0.0
         self.last_projection_delta_rms = 0.0
+        self.last_improvement_gate = 1.0
 
     def reset(self):
         self.controller.reset()
@@ -94,10 +104,17 @@ class PolicySafetyController:
         self.last_projected_action = np.zeros(self.env.action_space.shape, dtype=np.float32)
         self.last_projection_error = 0.0
         self.last_projection_delta_rms = 0.0
+        self.last_improvement_gate = 1.0
 
     def compute_action(self, obs, info):
         action = self.controller.compute_action(obs, info)
         parameterized = parameterize_policy_action(action, self.env, info, self.action_parameterization_cfg)
+        parameterized, self.last_improvement_gate = policy_improvement_gate(
+            parameterized,
+            self.env,
+            info,
+            self.improvement_gate_cfg,
+        )
         projected = shield_policy_action(parameterized, self.env, info, self.cfg)
         self.last_raw_action = adapt_action_to_env(parameterized, self.env)
         self.last_projected_action = adapt_action_to_env(projected, self.env)
@@ -154,10 +171,12 @@ def make_controller(
             controller = rl
         policy_safety_cfg = dict(config.get("policy_safety", {}))
         action_param_cfg = dict(config.get("policy_action_parameterization", {}))
+        improvement_gate_cfg = dict(config.get("policy_improvement_gate", {}))
         if policy_safety_cfg:
             if residual_cfg.get("enabled", False):
                 action_param_cfg = {}
-            return PolicySafetyController(controller, env, policy_safety_cfg, action_param_cfg)
+                improvement_gate_cfg = {}
+            return PolicySafetyController(controller, env, policy_safety_cfg, action_param_cfg, improvement_gate_cfg)
         return controller
     raise ValueError(f"Unknown controller: {name}")
 
@@ -236,6 +255,8 @@ def rollout(env: HalfCarEnv, controller, use_preview: bool) -> dict:
         if hasattr(controller, "last_projection_error"):
             row["policy_projection_error"] = float(controller.last_projection_error)
             row["policy_projection_delta_rms"] = float(controller.last_projection_delta_rms)
+        if hasattr(controller, "last_improvement_gate"):
+            row["policy_improvement_gate"] = float(controller.last_improvement_gate)
         for component_name, value in info.get("reward_components", {}).items():
             row[f"reward_{component_name}"] = float(value)
         if "ddroll" in d:
@@ -287,6 +308,7 @@ def compute_metrics(df: pd.DataFrame, settle_seconds: float = 1.0) -> dict:
         "action_deviation_rms",
         "policy_projection_error",
         "policy_projection_delta_rms",
+        "policy_improvement_gate",
     ):
         if column in df.columns:
             label = {
@@ -297,6 +319,7 @@ def compute_metrics(df: pd.DataFrame, settle_seconds: float = 1.0) -> dict:
                 "action_deviation_rms": "ActionDeviationRMS_N",
                 "policy_projection_error": "PolicyProjectionError",
                 "policy_projection_delta_rms": "PolicyProjectionDeltaRMS_N",
+                "policy_improvement_gate": "PolicyImprovementGate",
             }[column]
             metrics[label] = float(view[column].mean())
     for column in [name for name in df.columns if name.startswith("reward_")]:

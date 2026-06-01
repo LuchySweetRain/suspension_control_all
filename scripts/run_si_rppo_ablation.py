@@ -25,6 +25,7 @@ VARIANTS = {
     "ppo_scratch": {
         "residual_control": {"enabled": False},
         "policy_action_parameterization": {"enabled": False},
+        "policy_improvement_gate": {"enabled": False},
         "imitation": {"enabled": False},
         "evaluation": {"controllers": ["PASSIVE", "FULL_CAR_MPC_LITE"]},
         "rl": {
@@ -41,6 +42,7 @@ VARIANTS = {
     "bc_ppo": {
         "residual_control": {"enabled": False},
         "policy_action_parameterization": {"enabled": True},
+        "policy_improvement_gate": {"enabled": True},
         "imitation": {"enabled": True, "residual_targets": False, "anchor_enabled": True},
         "evaluation": {"controllers": ["PASSIVE", "FULL_CAR_MPC_LITE"]},
         "reward": {"deviation": 0.0},
@@ -48,6 +50,7 @@ VARIANTS = {
     "residual_bc_ppo": {
         "residual_control": {"enabled": True, "gate": {"enabled": False}, "shield": {"enabled": False}},
         "policy_action_parameterization": {"enabled": False},
+        "policy_improvement_gate": {"enabled": False},
         "imitation": {"enabled": True, "residual_targets": True, "anchor_enabled": False},
         "evaluation": {"controllers": ["PASSIVE", "FULL_CAR_MPC_LITE"]},
         "reward": {"deviation": 0.0},
@@ -55,6 +58,7 @@ VARIANTS = {
     "safe_residual_bc_ppo": {
         "residual_control": {"enabled": True, "gate": {"enabled": True}},
         "policy_action_parameterization": {"enabled": False},
+        "policy_improvement_gate": {"enabled": False},
         "imitation": {"enabled": True, "residual_targets": True, "anchor_enabled": False},
         "evaluation": {"controllers": ["PASSIVE", "FULL_CAR_MPC_LITE"]},
     },
@@ -73,6 +77,7 @@ CLAIM_METRICS = [
     "ActionDeviationRMS_N",
     "PolicyProjectionError",
     "PolicyProjectionDeltaRMS_N",
+    "PolicyImprovementGate",
 ]
 
 LOWER_IS_BETTER = {
@@ -563,6 +568,8 @@ def run_si_rppo_ablation(
             {
                 "residual_control": {"enabled": False},
                 "imitation": {"enabled": False},
+                "policy_action_parameterization": {"enabled": False},
+                "policy_improvement_gate": {"enabled": False},
                 "reward": {"deviation": 0.0},
                 "evaluation": {"controllers": ["PASSIVE", "FULL_CAR_MPC_LITE"]},
             },

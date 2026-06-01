@@ -15,7 +15,13 @@ if str(ROOT) not in sys.path:
 from config import load_config
 from controllers import MPCController, PIDController, SPDFController
 from controllers.rl_transformer import RLTransformerController
-from controllers.prior import parameterize_policy_action, residual_gate, shield_policy_action, shield_residual_action
+from controllers.prior import (
+    parameterize_policy_action,
+    policy_improvement_gate,
+    residual_gate,
+    shield_policy_action,
+    shield_residual_action,
+)
 from envs import HalfCarEnv, MuJoCoFullCarEnv, MuJoCoHalfCarEnv, MuJoCoVehicleEnv
 from experiments.evaluation import evaluate_all, make_controller
 from scripts.benchmark_vector_env import benchmark_vector_env
@@ -720,6 +726,35 @@ def test_delta_policy_action_parameterization_limits_step_change():
     assert np.max(np.abs(parameterized)) <= 0.75 * env.force_limit + 1e-5
 
 
+def test_policy_improvement_gate_scales_passive_deviation():
+    c = load_config(ROOT / "configs" / "mujoco_full_car_residual.yaml")
+    c["episode_seconds"] = 0.05
+    c["mujoco"]["settle_seconds"] = 0.2
+    c["domain_randomization"]["enabled"] = False
+    env = MuJoCoFullCarEnv(c, scenario=c["scenarios"][0], use_preview=True)
+    _, info = env.reset(seed=16)
+    action = np.ones(env.action_space.shape, dtype=np.float32) * 1000.0
+    quiet_info = dict(info)
+    quiet_info["road_preview_clean"] = np.zeros_like(info["road_preview_clean"])
+    gated_quiet, quiet_scale = policy_improvement_gate(
+        action,
+        env,
+        quiet_info,
+        {"enabled": True, "preview_rms_threshold": 0.1, "preview_rms_softness": 0.1, "accel_threshold": 100.0},
+    )
+    rough_info = dict(info)
+    rough_info["road_preview_clean"] = np.ones_like(info["road_preview_clean"]) * env.road_scale
+    gated_rough, rough_scale = policy_improvement_gate(
+        action,
+        env,
+        rough_info,
+        {"enabled": True, "preview_rms_threshold": 0.1, "preview_rms_softness": 0.1, "accel_threshold": 100.0},
+    )
+    env.close()
+    assert quiet_scale < rough_scale
+    assert np.max(np.abs(gated_quiet)) < np.max(np.abs(gated_rough))
+
+
 def test_collect_expert_dataset_and_ppo_bc_smoke(tmp_path):
     cfg_path = ROOT / "configs" / "mujoco_full_car_residual.yaml"
     out_path = tmp_path / "expert.npz"
@@ -817,17 +852,21 @@ def test_si_rppo_ablation_dry_run_writes_variants(tmp_path):
     assert not scratch_cfg["rl"]["ppo"]["adaptive_constraint_weights"]
     assert scratch_cfg["rl"]["ppo"]["feasibility_advantage_weight"] == 0.0
     assert not scratch_cfg["policy_action_parameterization"]["enabled"]
+    assert not scratch_cfg["policy_improvement_gate"]["enabled"]
     assert bc_cfg["rl"]["ppo"]["projection_penalty_weight"] > 0.0
     assert bc_cfg["rl"]["ppo"]["unsafe_penalty_weight"] > 0.0
     assert bc_cfg["rl"]["ppo"]["action_delta_penalty_weight"] > 0.0
     assert bc_cfg["rl"]["ppo"]["adaptive_constraint_weights"]
     assert "feasibility_advantage_weight" in bc_cfg["rl"]["ppo"]
     assert bc_cfg["policy_action_parameterization"]["enabled"]
+    assert bc_cfg["policy_improvement_gate"]["enabled"]
     assert not residual_cfg["imitation"]["anchor_enabled"]
     assert not residual_cfg["policy_action_parameterization"]["enabled"]
+    assert not residual_cfg["policy_improvement_gate"]["enabled"]
     assert not residual_cfg["residual_control"]["shield"]["enabled"]
     assert not safe_cfg["imitation"]["anchor_enabled"]
     assert not safe_cfg["policy_action_parameterization"]["enabled"]
+    assert not safe_cfg["policy_improvement_gate"]["enabled"]
     assert safe_cfg["residual_control"]["shield"]["enabled"]
     assert bc_cfg["imitation"]["anchor_enabled"]
     assert set(manifest["off_policy_baselines"]) == {"td3_baseline", "sac_baseline"}
@@ -835,6 +874,9 @@ def test_si_rppo_ablation_dry_run_writes_variants(tmp_path):
         config_path = Path(report["config"])
         assert config_path.is_file()
         assert report["planned_train_command"]
+        baseline_cfg = load_config(config_path)
+        assert not baseline_cfg["policy_action_parameterization"]["enabled"]
+        assert not baseline_cfg["policy_improvement_gate"]["enabled"]
     assert Path(manifest["combined_metrics"]).is_file()
     assert manifest["claim_report"]["status"] == "missing_data"
     assert manifest["claim_report"]["core_status"] == "missing_data"

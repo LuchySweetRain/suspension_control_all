@@ -609,3 +609,42 @@ Implementation status:
 - Done: `scripts/build_delta_ppo_evidence_table.py` generates a compact repeated-seed and full-matrix evidence table in `results/delta_ppo_evidence_table`.
 - Current full-matrix evidence: delta-parameterized BC-PPO beats PPO scratch, but TD3/SAC and passive-like behavior remain stronger under this short-horizon benchmark.
 - Next: add a safe-teacher improvement gate or passive-deviation confidence mechanism so active force is applied only when it is expected to improve comfort/safety over the safe teacher. This is now the main gap before making a broad CCFA-level superiority claim.
+
+## Current Revision: Safe-Teacher Gated Online PPO
+
+Implemented in this revision:
+
+- Done: `policy_improvement_gate` blends the delta-parameterized PPO action toward the passive teacher when preview/acceleration demand is low or safety margin is small.
+- Done: `PolicyImprovementGate` is logged during training and evaluation, and included in the evidence table.
+- Done: `run_si_rppo_ablation.py` keeps the gate enabled for `bc_ppo` and explicitly disables PPO-specific parameterization/gating for `ppo_scratch`, residual branches, TD3, and SAC.
+- Done: repeated-seed e20 evidence supports the core `bc_ppo` vs `ppo_scratch` claim on seeds 42, 43, and 44.
+- Done: fair full-matrix evidence is stored in `results/si_rppo_e20_improvement_gate_fair_baselines`.
+
+Updated paper direction:
+
+**Offline-imitation-initialized, projection-aware, safe-teacher-gated PPO for actuator-feasible online active suspension adaptation.**
+
+The key novelty is no longer just action smoothing or reward weighting. The algorithm changes the deployed policy class:
+
+```text
+u_t = Projection_U(
+    gate_t * DeltaPPO(o_t, u_{t-1})
+  + (1 - gate_t) * u_passive
+)
+```
+
+Where `gate_t` is an interpretable improvement-confidence proxy from road preview excitation, body attitude acceleration, and safety margin. This makes online PPO conservative by construction: it can learn active corrections, but it must earn deviation from the safe teacher state by state.
+
+Current evidence summary:
+
+- `bc_ppo` vs `ppo_scratch` is supported across seeds 42, 43, and 44.
+- In the fair full matrix, gated BC-PPO reaches return `-3635.3664`, unsafe steps `0.2`, action delta `11.0519`, tracking error `16.4909`, projection error `0.0005`, and mean gate `0.2688`.
+- SAC remains a strong return/safety baseline at return `-3307.5951` and unsafe steps `0.0`, but it has much rougher actions: action delta `151.9442`, tracking error `226.7207`, and projection error `0.2888`.
+- TD3 fails this short fair run with `301.0` unsafe steps, so it should be treated as high-variance rather than as a stable negative result.
+
+Next algorithm work:
+
+- Learn the gate or replace it with an uncertainty-aware improvement certificate.
+- Train a passive-vs-active advantage critic and open the gate only when the lower confidence bound is positive.
+- Add road scenarios where passive control is measurably insufficient, so the benchmark tests active-suspension value rather than passive safety alone.
+- Report gate activation by scenario, road class, and preview corruption level.

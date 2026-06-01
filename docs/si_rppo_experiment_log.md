@@ -438,3 +438,69 @@ Interpretation:
 - The method still does not beat TD3/SAC or passive-like behavior in this short-horizon setup. TD3/SAC learn near-passive low-action policies with zero unsafe steps and much lower actuator activity.
 - This means the current paper claim should be framed as an algorithmic fix for unsafe PPO exploration under actuator projection, not yet as a full replacement for off-policy baselines.
 - The next CCFA-strengthening algorithm step is a safe-teacher improvement gate: the learned controller should deviate from passive only when the policy has evidence that active force improves comfort/safety. This targets the remaining gap to passive/SAC without discarding the successful delta-parameterized PPO mechanism.
+
+## 2026-06-01: Safe-Teacher Improvement Gate
+
+Algorithm change:
+
+- Added `policy_improvement_gate`, a state-dependent deviation gate after delta action parameterization and before safety projection.
+- The gate blends the PPO action toward the passive safe teacher when road preview RMS, body/pitch/roll acceleration demand, or safety margin do not justify active-force deviation.
+- Training and evaluation now log `PolicyImprovementGate`, so the active/passive intervention ratio is auditable instead of hidden inside the controller.
+- `bc_ppo` enables the gate; `ppo_scratch`, residual PPO branches, and off-policy TD3/SAC baselines explicitly disable the PPO-specific action parameterization and gate in the ablation runner.
+
+Mechanism:
+
+```text
+u_pre,t = gate_t * u_delta_ppo,t + (1 - gate_t) * u_passive,t
+
+gate_t = clip(
+    min_scale
+  + (max_scale - min_scale) * max(preview_gate_t, acceleration_gate_t) * safety_gate_t
+)
+```
+
+Repeated-seed evidence:
+
+```text
+python scripts/run_projection_seed_sweep.py --config configs/mujoco_full_car_safe_ppo.yaml --out results/projection_seed42_e20_improvement_gate --seeds 42 --episodes 20 --expert-episodes 20
+python scripts/run_projection_seed_sweep.py --config configs/mujoco_full_car_safe_ppo.yaml --out results/projection_seed43_e20_improvement_gate --seeds 43 --episodes 20 --expert-episodes 20
+python scripts/run_projection_seed_sweep.py --config configs/mujoco_full_car_safe_ppo.yaml --out results/projection_seed44_e20_improvement_gate --seeds 44 --episodes 20 --expert-episodes 20
+```
+
+Core PPO repeated-seed result:
+
+| Seed | CoreStatus | ReturnDelta | UnsafeDelta | BodyDelta | PitchDelta | RollDelta | ActionDeltaDelta | TrackingDelta | ProjectionErrorDelta |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 42 | supported | 6326.7494 | -20.8000 | -1.8543 | -2.3140 | -3.8384 | -158.1090 | -235.9193 | -0.4800 |
+| 43 | supported | 11580.6440 | -52.4000 | -2.8097 | -3.1556 | -6.4113 | -151.9777 | -226.7706 | -0.4406 |
+| 44 | supported | 10346.3676 | -112.4000 | -2.3196 | -1.0411 | -2.9909 | -90.5725 | -135.1461 | -0.3260 |
+
+Full-matrix command with fair off-policy baselines:
+
+```text
+python scripts/run_si_rppo_ablation.py --config configs/mujoco_full_car_safe_ppo.yaml --out results/si_rppo_e20_improvement_gate_fair_baselines --episodes 20 --expert-episodes 20 --expert-controller PASSIVE --skip-unsafe-expert --baseline-algorithms td3,sac
+```
+
+Mean learned-controller metrics:
+
+| Variant | Controller | Return | Unsafe | Body | Pitch | Roll | ActionDelta | Tracking | ProjectionError | Gate |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| ppo_scratch | PPO | -9962.1158 | 21.0000 | 2.4933 | 5.2429 | 3.8918 | 169.1610 | 252.4103 | 0.4804 | 1.0000 |
+| bc_ppo | PPO | -3635.3664 | 0.2000 | 0.6389 | 2.9289 | 0.0535 | 11.0519 | 16.4909 | 0.0005 | 0.2688 |
+| residual_bc_ppo | PPO | -7776.8564 | 2.0000 | 3.5037 | 3.8325 | 0.5596 | 144.3384 | 215.3717 | 0.3141 | 1.0000 |
+| safe_residual_bc_ppo | PPO | -12061.8027 | 10.0000 | 4.3393 | 5.2741 | 0.1044 | 133.5292 | 199.2430 | 0.3331 | 1.0000 |
+| td3_baseline | TD3 | -19406.2439 | 301.0000 | 1.0131 | 2.8833 | 1.1454 | 0.0000 | 0.0000 | 0.0399 | 1.0000 |
+| sac_baseline | SAC | -3307.5951 | 0.0000 | 0.8409 | 2.9693 | 0.5187 | 151.9442 | 226.7207 | 0.2888 | 1.0000 |
+
+Interpretation:
+
+- The core PPO claim is now supported on seeds 42, 43, and 44: gated BC-PPO beats PPO scratch on return, unsafe steps, body/pitch/roll acceleration, action smoothness, actuator tracking, and projection error.
+- The mean gate for `bc_ppo` is `0.2688`, which means the policy remains close to passive on easy road segments and opens mainly under stronger excitation. This is a clean algorithmic novelty point for active suspension: safe-teacher gated online PPO rather than always-active force output.
+- Against fair TD3/SAC baselines, the picture is mixed. Gated BC-PPO strongly beats TD3 in return and safety in this e20 run, while SAC has slightly better return and zero unsafe steps but much worse action smoothness, tracking, roll acceleration, and projection error.
+- The current defensible paper claim is no longer broad "PPO beats every off-policy baseline"; it is: **offline-imitation-initialized, projection-aware, safe-teacher-gated PPO makes online PPO actuator-feasible and safe enough for active-suspension adaptation, and is competitive with SAC while avoiding SAC's high action roughness.**
+
+Next CCFA-strengthening step:
+
+- Replace the hand-designed gate with a learned or uncertainty-aware improvement certificate: predict passive-vs-active advantage under road preview uncertainty and open the gate only when the lower confidence bound is positive.
+- Add harder scenarios where passive control is insufficient, otherwise the passive/SAC near-zero-action solution remains a strong short-horizon baseline.
+- Report gate activation by road class and scenario to prove the controller is not merely collapsing to passive.

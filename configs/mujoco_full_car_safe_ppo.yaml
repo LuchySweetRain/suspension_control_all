@@ -24,6 +24,21 @@ policy_action_parameterization:
   min_margin_scale: 0.25
   safety_margin_power: 1.0
 
+policy_improvement_gate:
+  enabled: true
+  teacher: passive
+  min_scale: 0.0
+  max_scale: 1.0
+  preview_rms_threshold: 0.10
+  preview_rms_softness: 0.08
+  accel_threshold: 1.2
+  accel_softness: 2.0
+  pitch_acc_scale: 0.2
+  roll_acc_scale: 0.2
+  safety_margin_scale: true
+  hard_margin: 0.04
+  soft_margin: 0.2
+
 rl:
   episodes: 200
   eval_every: 10

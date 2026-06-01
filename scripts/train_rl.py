@@ -22,6 +22,7 @@ from controllers.prior import (
     compute_prior_action,
     make_prior_controller,
     parameterize_policy_action,
+    policy_improvement_gate,
     residual_gate,
     shield_policy_action,
     shield_residual_action,
@@ -388,6 +389,7 @@ def train_ppo(agent: PPOAgent, config: dict, run_dir: Path, episodes: int):
     imitation_cfg = dict(config.get("imitation", {}))
     policy_safety_cfg = dict(config.get("policy_safety", {}))
     action_param_cfg = dict(config.get("policy_action_parameterization", {}))
+    improvement_gate_cfg = dict(config.get("policy_improvement_gate", {}))
     pbar = trange(episodes, desc="PPO")
     for episode in pbar:
         scenario = scenario_sampler.select(episode)
@@ -407,6 +409,7 @@ def train_ppo(agent: PPOAgent, config: dict, run_dir: Path, episodes: int):
             "projection_error": [],
             "unsafe": [],
             "action_delta": [],
+            "improvement_gate": [],
         }
         ep_return = 0.0
         last_executed_action = None
@@ -425,6 +428,9 @@ def train_ppo(agent: PPOAgent, config: dict, run_dir: Path, episodes: int):
                 action = residual_action
                 prior_action = None
                 action = parameterize_policy_action(action, env, info, action_param_cfg)
+                action, improvement_gate = policy_improvement_gate(action, env, info, improvement_gate_cfg)
+            if residual_enabled:
+                improvement_gate = 1.0
             raw_policy_action = np.asarray(action, dtype=np.float32).copy()
             action = shield_policy_action(action, env, info, policy_safety_cfg)
             projection_error = float(
@@ -455,6 +461,7 @@ def train_ppo(agent: PPOAgent, config: dict, run_dir: Path, episodes: int):
             trajectory["projection_error"].append(projection_error)
             trajectory["unsafe"].append(float(bool(next_info.get("unsafe", False))))
             trajectory["action_delta"].append(action_delta)
+            trajectory["improvement_gate"].append(float(improvement_gate))
             last_executed_action = np.asarray(action, dtype=np.float32).copy()
             obs = next_obs
             info = next_info
@@ -490,6 +497,7 @@ def train_ppo(agent: PPOAgent, config: dict, run_dir: Path, episodes: int):
             "mean_projection_error": float(np.mean(trajectory["projection_error"])) if trajectory["projection_error"] else 0.0,
             "unsafe_fraction": float(np.mean(trajectory["unsafe"])) if trajectory["unsafe"] else 0.0,
             "mean_action_delta": float(np.mean(trajectory["action_delta"])) if trajectory["action_delta"] else 0.0,
+            "mean_improvement_gate": float(np.mean(trajectory["improvement_gate"])) if trajectory["improvement_gate"] else 1.0,
             "eval_mean_return": None,
         }
         if hasattr(agent, "constraint_weight_summary"):
