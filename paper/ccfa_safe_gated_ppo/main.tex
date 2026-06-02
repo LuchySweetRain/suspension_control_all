@@ -31,9 +31,9 @@ Deep reinforcement learning (DRL) is attractive for active suspension control be
 Yet direct continuous-action RL is poorly matched to safety-critical suspension deployment: random online exploration can create excessive body acceleration, unsafe suspension travel, actuator-rate violations, and a mismatch between sampled policy actions and the force actually executed after actuator and safety projection.
 This paper proposes Safe-Teacher Gated Projection-Aware PPO (STG-PPO), an offline-to-online control framework for full-car active suspension.
 The controller first initializes PPO by behavior cloning a safe passive teacher, then constrains online PPO through three deployment-aware mechanisms: a delta-parameterized action space tied to the previously executed force, projection-consistency and actuator-feasibility regularization, and a state-dependent safe-teacher improvement gate that permits active force only when road preview excitation, body attitude acceleration, and safety margin indicate that deviation from the passive teacher is justified.
-On a MuJoCo full-car benchmark with correlated ISO-style roads, pothole-roll, sine-roll, and mixed-road scenarios, STG-PPO improves over PPO from scratch on all core safety and feasibility metrics across three seeds.
-In the full matrix, STG-PPO reduces unsafe steps from 21.0 to 0.2, action-delta RMS from 169.16 N to 11.05 N, actuator tracking RMS from 252.41 N to 16.49 N, and policy projection error from 0.4804 to 0.0005.
-Against SAC, STG-PPO is slightly lower in return but substantially smoother and less projection-dependent.
+On a MuJoCo full-car benchmark with physically calibrated vehicle parameters, correlated ISO-style roads, pothole-roll, sine-roll, and mixed-road scenarios, STG-PPO improves over PPO from scratch on all core safety and feasibility metrics.
+In the full 200-episode matrix, STG-PPO reduces unsafe steps from 106.0 to 0.0, action-delta RMS from 142.92 N to 13.98 N, actuator tracking RMS from 225.09 N to 20.86 N, and policy projection error from 0.3626 to 0.0001.
+Against SAC, STG-PPO obtains higher return and lower body/pitch acceleration and projection error, while SAC remains closer to passive behavior in roll and actuator activity.
 These results support a focused claim: safe-teacher gated online PPO is a viable and auditable path to actuator-feasible active-suspension adaptation, rather than an unconstrained replacement for classical or off-policy controllers.
 \end{abstract}
 
@@ -61,7 +61,7 @@ The contributions are:
     \item We formulate active suspension online adaptation as a projection-aware PPO problem in which the learning objective penalizes mismatch between sampled policy actions and actuator-feasible executed actions.
     \item We introduce a safe-teacher improvement gate that converts PPO from an always-active force generator into a state-dependent residual over a passive teacher.
     \item We provide a full-car MuJoCo benchmark with actuator lag, rate limits, road preview uncertainty hooks, safety metrics, and decomposed reward logging.
-    \item We report ablations showing that STG-PPO consistently repairs unsafe PPO exploration across three seeds and is competitive with SAC while using far smoother and more actuator-feasible commands.
+    \item We report ablations showing that STG-PPO repairs unsafe PPO exploration and is competitive with TD3/SAC under physically calibrated full-car dynamics, while preserving actuator feasibility.
 \end{itemize}
 
 \section{Related Work}
@@ -229,6 +229,7 @@ The penalties discourage actions that become feasible only because the safety la
 \paragraph{Environment.}
 Experiments use a MuJoCo full-car active-suspension environment \citep{todorov2012mujoco}.
 The model includes heave, pitch, roll, four unsprung masses, four road anchors, passive spring-damper elements, and active suspension force actuators.
+The calibrated benchmark uses a 1500 kg sprung body, 2160 kg m$^2$ pitch inertia, 460 kg m$^2$ roll inertia, 59 kg unsprung mass per wheel, front/rear suspension stiffness of 35000/38000 N/m, and tire stiffness of 190000 N/m.
 The benchmark includes class-B and class-C correlated random roads, mixed full-road excitation, pothole-roll, and sine-roll scenarios.
 Road preview is available to the controller, while clean preview is retained for diagnostics and ablation.
 
@@ -266,9 +267,9 @@ Seed & Return & Unsafe & Body & Pitch & Roll & $\Delta u$ & Track & Proj. \\
 
 \subsection{Full-Matrix Comparison}
 
-Table~\ref{tab:full} summarizes learned-controller means.
-Compared with PPO from scratch, STG-PPO reduces unsafe steps from 21.0 to 0.2 and projection error from 0.4804 to 0.0005.
-The mean gate is 0.2688, indicating that the policy remains near passive on easy segments and opens mainly under stronger excitation.
+Table~\ref{tab:full} summarizes learned-controller means for the physically calibrated 200-episode matrix.
+Compared with PPO from scratch, STG-PPO reduces unsafe steps from 106.0 to 0.0 and projection error from 0.3626 to 0.0001.
+The mean gate is 0.1878, indicating that the policy remains near passive on easy segments and opens mainly under stronger excitation.
 
 \begin{table*}[t]
 \centering
@@ -278,22 +279,21 @@ The mean gate is 0.2688, indicating that the policy remains near passive on easy
 \toprule
 Variant & Ctrl. & Return & Unsafe & Body & Pitch & Roll & $\Delta u$ & Track & Proj. & Gate \\
 \midrule
-PPO scratch & PPO & -9962.12 & 21.00 & 2.493 & 5.243 & 3.892 & 169.16 & 252.41 & 0.4804 & 1.000 \\
-STG-PPO & PPO & -3635.37 & 0.20 & 0.639 & 2.929 & 0.053 & 11.05 & 16.49 & 0.0005 & 0.269 \\
-Residual BC-PPO & PPO & -7776.86 & 2.00 & 3.504 & 3.833 & 0.560 & 144.34 & 215.37 & 0.3141 & 1.000 \\
-Safe residual BC-PPO & PPO & -12061.80 & 10.00 & 4.339 & 5.274 & 0.104 & 133.53 & 199.24 & 0.3331 & 1.000 \\
-TD3 & TD3 & -19406.24 & 301.00 & 1.013 & 2.883 & 1.145 & 0.00 & 0.00 & 0.0399 & 1.000 \\
-SAC & SAC & -3307.60 & 0.00 & 0.841 & 2.969 & 0.519 & 151.94 & 226.72 & 0.2888 & 1.000 \\
+PPO scratch & PPO & -8806.61 & 106.00 & 1.033 & 6.546 & 2.617 & 142.92 & 225.09 & 0.3626 & 1.000 \\
+STG-PPO & PPO & -423.91 & 0.00 & 0.480 & 0.748 & 0.080 & 13.98 & 20.86 & 0.0001 & 0.188 \\
+Residual BC-PPO & PPO & -9838.13 & 65.60 & 2.151 & 1.209 & 9.488 & 162.69 & 245.60 & 0.3166 & 1.000 \\
+Safe residual BC-PPO & PPO & -13598.16 & 105.40 & 0.613 & 0.947 & 11.920 & 163.97 & 246.40 & 0.3349 & 1.000 \\
+TD3 & TD3 & -523.07 & 0.00 & 0.626 & 0.887 & 0.626 & 122.10 & 182.18 & 0.0421 & 1.000 \\
+SAC & SAC & -577.53 & 0.00 & 0.499 & 0.751 & 0.054 & 0.00 & 0.00 & 0.1880 & 1.000 \\
 \bottomrule
 \end{tabular}
 \end{table*}
 
 \paragraph{Against SAC and TD3.}
 STG-PPO is not claimed to dominate all off-policy methods.
-SAC has slightly better mean return and zero unsafe steps in this short e20 run.
-However, SAC uses much rougher and less actuator-feasible commands: action-delta RMS is 151.94 N versus 11.05 N for STG-PPO, tracking RMS is 226.72 N versus 16.49 N, and projection error is 0.2888 versus 0.0005.
-TD3 is unstable in this fair-baseline setting, with 301 unsafe steps.
-We therefore interpret the off-policy comparison as evidence of a tradeoff: STG-PPO is the smoother, more executable online-adaptation policy, while SAC remains a strong return/safety baseline.
+In the calibrated e200 run, STG-PPO has higher mean return than both TD3 and SAC and lower body/pitch acceleration and projection error.
+However, SAC behaves close to a passive low-action policy: it has lower roll acceleration and essentially zero actuator activity, while STG-PPO opens the gate on a small fraction of states.
+We therefore interpret the off-policy comparison as evidence of a tradeoff: STG-PPO is the stronger projection-aware online-adaptation policy, while SAC and passive control remain strong low-action references on the current road set.
 
 \subsection{Ablation Interpretation}
 
@@ -315,9 +315,9 @@ The gate would then be learned from data while preserving the safety principle: 
 
 \section{Limitations}
 
-First, the evidence is simulation-only and uses short e20 runs.
-Second, SAC remains competitive in return and safety, so the current claim is actuator feasibility and online PPO repair, not universal superiority.
-Third, the passive teacher is strong on several roads; harder road classes and payload/parameter variation are needed to show when active force is essential.
+First, the evidence is simulation-only and still covers a limited set of road distributions and random seeds.
+Second, passive control remains the best nominal reference on the calibrated road set, so the current claim is actuator feasibility and online PPO repair, not active-control superiority over passive suspension.
+Third, SAC remains competitive as a low-action baseline; harder road classes and payload/parameter variation are needed to show when active force is essential.
 Fourth, the current gate uses hand-tuned thresholds.
 Fifth, the related-work section should be expanded with additional verified recent active-suspension DRL papers before submission.
 
@@ -325,8 +325,8 @@ Fifth, the related-work section should be expanded with additional verified rece
 
 We presented STG-PPO, an offline-imitation-initialized, projection-aware, safe-teacher-gated PPO framework for full-car active suspension control.
 The method addresses a deployment-specific problem in continuous-action RL: the policy should not be trained as if raw sampled actions are executed when actuator and safety projection substantially modify them.
-Across three seeds, STG-PPO consistently improves over PPO from scratch on return, safety, comfort, action smoothness, actuator tracking, and projection error.
-In the full matrix, it is competitive with SAC while producing much smoother and more executable commands.
+Across the calibrated full-time matrix, STG-PPO improves over PPO from scratch on return, safety, comfort, action smoothness, actuator tracking, and projection error.
+It also outperforms TD3/SAC on return and projection consistency, while passive and SAC remain strong low-action references.
 The next step is to learn the improvement gate as an uncertainty-aware certificate and to evaluate on harder road distributions where passive control is insufficient.
 
 \bibliographystyle{plainnat}

@@ -504,3 +504,52 @@ Next CCFA-strengthening step:
 - Replace the hand-designed gate with a learned or uncertainty-aware improvement certificate: predict passive-vs-active advantage under road preview uncertainty and open the gate only when the lower confidence bound is positive.
 - Add harder scenarios where passive control is insufficient, otherwise the passive/SAC near-zero-action solution remains a strong short-horizon baseline.
 - Report gate activation by road class and scenario to prove the controller is not merely collapsing to passive.
+
+## 2026-06-02: Physically Calibrated Full-Time Matrix
+
+After the model-parameter audit, the full experiment was rerun with the calibrated full-car configuration:
+
+```text
+python scripts/run_si_rppo_ablation.py --config configs/mujoco_full_car_physical.yaml --out results/si_rppo_e200_physical_params_full_matrix --episodes 200 --expert-episodes 200 --expert-controller PASSIVE --skip-unsafe-expert --baseline-algorithms td3,sac
+```
+
+The calibrated config uses a full-car parameter set close to common active-suspension tables: `mb=1500 kg`, `Ip=2160 kg m^2`, `roll_inertia=460 kg m^2`, `59 kg` per wheel, front/rear suspension stiffness `35000/38000 N/m`, damping `1000/1100 Ns/m`, and tire stiffness `190000 N/m`. Domain randomization is disabled for this nominal physical benchmark.
+
+Report status:
+
+- Overall claim report: `ready`.
+- Core PPO claim: `supported`.
+- `projection_aware_imitation`: `supported`.
+- `imitation_initialization`: `supported`.
+- Residual-prior and safe-residual claims: still weak.
+
+Mean learned-controller metrics:
+
+| Variant | Controller | Return | Unsafe | Body | Pitch | Roll | ActionDelta | Tracking | ProjectionError | Gate |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| ppo_scratch | PPO | -8806.6142 | 106.0000 | 1.0334 | 6.5462 | 2.6168 | 142.9242 | 225.0887 | 0.3626 | 1.0000 |
+| bc_ppo | PPO | -423.9141 | 0.0000 | 0.4805 | 0.7475 | 0.0801 | 13.9815 | 20.8623 | 0.0001 | 0.1878 |
+| residual_bc_ppo | PPO | -9838.1269 | 65.6000 | 2.1514 | 1.2091 | 9.4882 | 162.6863 | 245.6013 | 0.3166 | 1.0000 |
+| safe_residual_bc_ppo | PPO | -13598.1555 | 105.4000 | 0.6127 | 0.9474 | 11.9202 | 163.9713 | 246.4034 | 0.3349 | 1.0000 |
+| td3_baseline | TD3 | -523.0663 | 0.0000 | 0.6263 | 0.8870 | 0.6263 | 122.0955 | 182.1828 | 0.0421 | 1.0000 |
+| sac_baseline | SAC | -577.5323 | 0.0000 | 0.4991 | 0.7509 | 0.0544 | 0.0000 | 0.0000 | 0.1880 | 1.0000 |
+
+Passive reference:
+
+| Controller | Return | Unsafe | Body | Pitch | Roll | ActionDelta | Tracking |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| PASSIVE | -413.7443 | 0.0000 | 0.4719 | 0.7440 | 0.0246 | 0.0000 | 0.0000 |
+
+Interpretation:
+
+- The calibrated full-time matrix strongly supports the core PPO story. `bc_ppo` improves over `ppo_scratch` on every core metric: return improves by `8382.7`, unsafe steps drop from `106` to `0`, action delta drops from `142.9242` to `13.9815`, actuator tracking drops from `225.0887` to `20.8623`, and projection error drops from `0.3626` to `0.0001`.
+- Under the physical config, `bc_ppo` is also stronger than TD3 on return, body/pitch/roll comfort, action smoothness, tracking, and projection error. TD3 is safe but much rougher.
+- `bc_ppo` improves over SAC on return, body and pitch acceleration, and projection error. SAC remains better on roll and uses essentially zero action change in this run, behaving close to a low-action/passive policy.
+- Passive remains the strongest reference in this nominal physical benchmark. This means the paper should not claim active control superiority on the current road set. The defensible claim is that STG-PPO learns a near-passive, safe, actuator-feasible online policy and avoids the unsafe/high-projection failure of standard PPO.
+- The residual and MPC-lite branches are now clearly poor under the calibrated physical parameters. The reduced full-car prior produces `69` unsafe steps and large roll acceleration; residual PPO inherits this weakness. The prior controller needs retuning or replacement before residual RL can be a main contribution.
+
+Next algorithm/evaluation step:
+
+- Add or emphasize road distributions where passive suspension is insufficient, e.g. higher-amplitude roll/pothole scenarios, payload shifts, actuator-relevant transient comfort objectives, or explicit active-control benefit metrics.
+- Retune `FULL_CAR_MPC_LITE` for the calibrated physical model before using it as a residual prior.
+- Replace the hand-designed gate with a learned passive-vs-active improvement certificate so the policy can justify opening beyond the passive teacher when active force is truly beneficial.
