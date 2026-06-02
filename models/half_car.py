@@ -67,6 +67,39 @@ class HalfCarParams:
         p.b_real = p.b - (p.a_real - p.a)
         return p
 
+    @classmethod
+    def from_config(cls, config: dict, seed: int | None = None) -> "HalfCarParams":
+        p = cls.from_seed(int(config.get("seed", 42) if seed is None else seed))
+        overrides = dict(config.get("vehicle_params", {}) or {})
+        if not overrides:
+            return p
+
+        nominal_to_real = {
+            "mb": "mb_real",
+            "Ip": "Ip_real",
+            "kf1": "kf1_real",
+            "kr1": "kr1_real",
+            "knf1": "knf1_real",
+            "knr1": "knr1_real",
+            "be": "be_real",
+            "bc": "bc_real",
+            "a": "a_real",
+            "b": "b_real",
+        }
+        real_keys = set(nominal_to_real.values())
+        for key, value in overrides.items():
+            if not hasattr(p, key) or key in real_keys:
+                continue
+            numeric = float(value)
+            setattr(p, key, numeric)
+            if key in nominal_to_real:
+                setattr(p, nominal_to_real[key], numeric)
+        for key, value in overrides.items():
+            if not hasattr(p, key) or key not in real_keys:
+                continue
+            setattr(p, key, float(value))
+        return p
+
 
 class HalfCarModel:
     """Nonlinear uncertain half-car active suspension model."""
@@ -136,4 +169,3 @@ class HalfCarModel:
         k3 = self.derivative(x + 0.5 * dt * k2, action, road)
         k4 = self.derivative(x + dt * k3, action, road)
         return np.asarray(x, dtype=np.float64) + dt / 6.0 * (k1 + 2 * k2 + 2 * k3 + k4)
-

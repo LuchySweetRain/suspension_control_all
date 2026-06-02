@@ -32,7 +32,7 @@ class HalfCarEnv(gym.Env if gym is not None else object):
         self.preview_dt = float(config["preview"].get("dt", self.control_dt))
         self.road_scale = float(config.get("road_scale", 0.1))
         self.use_preview = use_preview
-        self.params = HalfCarParams.from_seed(int(config.get("seed", 42)))
+        self.params = HalfCarParams.from_config(config)
         self.model = HalfCarModel(self.params)
         self.scenario = scenario or config["scenarios"][0]
         self.speed = float(self.scenario.get("speed", config.get("speed", 20.0)))
@@ -145,4 +145,3 @@ class HalfCarEnv(gym.Env if gym is not None else object):
             "unsafe": bool(unsafe),
             "scenario": self.scenario.get("name", ""),
         }
-

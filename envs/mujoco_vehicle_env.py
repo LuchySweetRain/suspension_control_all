@@ -73,7 +73,7 @@ class MuJoCoVehicleEnv(gym.Env if gym is not None else object):
         self.height = int(height)
         self.vertical_scale = float(vertical_scale)
 
-        self.params = HalfCarParams.from_seed(int(config.get("seed", 42)))
+        self.params = HalfCarParams.from_config(config)
         self.scenario = scenario or config["scenarios"][0]
         self.speed = float(self.scenario.get("speed", config.get("speed", 20.0)))
         self.road = RoadProfileFactory.create(self.scenario, self.episode_seconds, self.dt)

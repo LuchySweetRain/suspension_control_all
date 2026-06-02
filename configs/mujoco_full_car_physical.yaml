@@ -1,0 +1,62 @@
+inherits: mujoco_full_car_safe_ppo.yaml
+
+# Physically calibrated full-car parameter set for paper-grade experiments.
+# The base code uses HalfCarParams for both half-car and full-car modes; in
+# full-car corner mode, mwf/mwr are split into left/right corner masses.
+vehicle_params:
+  # Full sprung body mass and pitch inertia.
+  mb: 1500.0
+  mb_min: 1350.0
+  mb_max: 1650.0
+  Ip: 2160.0
+  Ip_min: 1800.0
+  Ip_max: 2600.0
+
+  # Half-axle unsprung masses; full-car corner masses are 0.5 * mwf/mwr.
+  mwf: 118.0
+  mwr: 118.0
+
+  # Per-corner suspension/tire parameters in full-car corner mode.
+  kf1: 35000.0
+  kr1: 38000.0
+  be: 1000.0
+  bc: 1100.0
+  kf2: 190000.0
+  kr2: 190000.0
+  bf2: 150.0
+  br2: 150.0
+
+  # Balanced 2.7 m wheelbase benchmark.
+  a: 1.35
+  b: 1.35
+
+full_car:
+  track_width: 1.524
+  roll_inertia: 460.0
+
+domain_randomization:
+  enabled: false
+
+actuator:
+  enabled: true
+  time_constant: 0.02
+  rate_limit: 100000.0
+
+safety_limits:
+  max_suspension_travel: 0.12
+  max_pitch: 0.12
+  max_roll: 0.12
+  max_wheel_displacement: 0.25
+  terminate_on_unsafe: false
+  unsafe_penalty: 10.0
+
+policy_safety:
+  enabled: true
+  max_action_fraction: 0.75
+  max_delta_fraction: 0.08
+  hard_margin: 0.02
+  soft_margin: 0.08
+
+policy_improvement_gate:
+  hard_margin: 0.02
+  soft_margin: 0.08

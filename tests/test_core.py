@@ -90,6 +90,30 @@ def test_half_car_parameters_match_spdf_constant_sim():
     assert p.fmax == 5000.0
 
 
+def test_vehicle_param_overrides_are_exported():
+    c = cfg()
+    c["vehicle_params"] = {
+        "mb": 1500.0,
+        "Ip": 2500.0,
+        "kf1": 28000.0,
+        "kr1": 28000.0,
+        "be": 1800.0,
+        "bc": 1800.0,
+        "a": 1.35,
+        "b": 1.35,
+    }
+    env = HalfCarEnv(c, scenario=c["scenarios"][0], use_preview=False)
+    assert env.params.mb == 1500.0
+    assert env.params.mb_real == 1500.0
+    assert env.params.Ip_real == 2500.0
+    assert env.params.kf1_real == 28000.0
+    assert env.params.kr1_real == 28000.0
+    assert env.params.be_real == 1800.0
+    assert env.params.bc_real == 1800.0
+    assert env.params.a_real == 1.35
+    assert env.params.b_real == 1.35
+
+
 def test_road_preview_shape():
     c = cfg()
     scenario = c["scenarios"][0]

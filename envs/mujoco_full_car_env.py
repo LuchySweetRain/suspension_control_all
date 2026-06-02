@@ -94,7 +94,7 @@ class MuJoCoFullCarEnv(gym.Env if gym is not None else object):
         self.width = int(width)
         self.height = int(height)
 
-        self.params = HalfCarParams.from_seed(int(config.get("seed", 42)))
+        self.params = HalfCarParams.from_config(config)
         full_cfg = config.get("full_car", {})
         self.track_width = float(full_cfg.get("track_width", 1.62))
         self.roll_inertia = float(full_cfg.get("roll_inertia", 520.0))
@@ -318,7 +318,7 @@ class MuJoCoFullCarEnv(gym.Env if gym is not None else object):
 
     def _apply_domain_randomization(self):
         dr = self.config.get("domain_randomization", {})
-        self.params = HalfCarParams.from_seed(int(self.config.get("seed", 42)))
+        self.params = HalfCarParams.from_config(self.config)
         if not dr.get("enabled", False):
             self.speed = float(self.scenario.get("speed", self.config.get("speed", 20.0)))
             self.road_scale_randomization = 1.0
@@ -824,11 +824,12 @@ class MuJoCoFullCarEnv(gym.Env if gym is not None else object):
             for c in ("fl", "fr", "rl", "rr"):
                 is_front = c[0] == "f"
                 k_s = p.kf1_real if is_front else p.kr1_real
+                b_s = p.be_real if is_front else p.bc_real
                 k_t = p.kf2 if is_front else p.kr2
                 b_t = p.bf2 if is_front else p.br2
                 rows.append(
                     f"""
-    <spatial name="{c}_susp" stiffness="{k_s:.9f}" damping="{p.be_real:.9f}" springlength="{susp_rest:.9f}">
+    <spatial name="{c}_susp" stiffness="{k_s:.9f}" damping="{b_s:.9f}" springlength="{susp_rest:.9f}">
       <site site="{c}_body_site"/>
       <site site="{c}_wheel_site"/>
     </spatial>
