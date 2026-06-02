@@ -1,0 +1,339 @@
+\documentclass[UTF8,letterpaper,twocolumn]{ctexart}
+
+\usepackage[margin=0.75in]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{multirow}
+\usepackage{url}
+\usepackage[hidelinks]{hyperref}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{microtype}
+\usepackage[numbers,sort&compress]{natbib}
+
+\ctexset{
+  section = {format = \large\bfseries},
+  subsection = {format = \normalsize\bfseries}
+}
+
+\title{面向执行器可行全车主动悬架控制的安全教师门控投影感知 PPO}
+
+\author{匿名作者}
+
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+深度强化学习适合主动悬架控制，因为它能够在不依赖完全精确车辆模型的情况下适应非线性的路面--车辆相互作用。
+但是，直接将连续动作强化学习用于安全关键的主动悬架部署并不合适：随机在线探索可能导致过大的车身加速度、不安全的悬架行程、执行器速率不可行，以及采样策略动作与经过执行器和安全投影后实际作用力之间的不一致。
+本文提出安全教师门控投影感知 PPO（Safe-Teacher Gated Projection-Aware PPO, STG-PPO），用于全车主动悬架的离线到在线控制。
+该方法首先使用安全被动教师对 PPO 进行行为克隆初始化，然后通过三类部署感知机制约束在线 PPO：与上一时刻已执行力绑定的增量动作参数化、投影一致性与执行器可行性正则，以及状态相关的安全教师改进门控。
+该门控仅当路面预瞄激励、车身姿态加速度和安全裕度表明偏离被动教师具有合理依据时，才允许策略输出主动控制力。
+在包含相关 ISO 风格随机路、坑洞侧倾、正弦侧倾和混合路面的 MuJoCo 全车基准上，STG-PPO 在三个随机种子上均相对从零训练 PPO 改善核心安全和可行性指标。
+在完整矩阵实验中，STG-PPO 将不安全步数从 21.0 降至 0.2，将动作变化 RMS 从 169.16 N 降至 11.05 N，将执行器跟踪 RMS 从 252.41 N 降至 16.49 N，并将策略投影误差从 0.4804 降至 0.0005。
+与 SAC 相比，STG-PPO 的回报略低，但动作更平滑、对安全投影依赖更小。
+这些结果支持一个聚焦的结论：安全教师门控在线 PPO 是实现执行器可行主动悬架在线适应的一条可审计路径，而不是对经典控制或离策略控制器的无约束替代。
+\end{abstract}
+
+\section{引言}
+
+主动悬架系统通过在车身与车轮之间施加可控垂向力来改善乘坐舒适性和操纵稳定性。
+现代感知和路面预瞄系统进一步使前馈式主动控制成为可能，但也带来了更困难的学习控制问题：控制器必须利用预瞄信息，同时满足悬架行程、轮胎载荷、安全姿态和执行器滞后/速率约束。
+带道路预瞄的模型预测控制（MPC）是自然方案，因为它能够显式编码约束 \citep{papadimitrakis2022preview_mpc,li2024speed_preview_mpc}。
+然而，精确全车模型、在线优化成本、感知延迟以及未建模执行器动态都会削弱纯模型控制在部署中的鲁棒性。
+
+深度强化学习提供了另一条有吸引力的路径。
+PPO \citep{schulman2017ppo}、TD3 \citep{fujimoto2018td3} 和 SAC \citep{haarnoja2018sac} 等连续动作方法能够在仿真中学习非线性反馈策略。
+已有研究开始将 DRL 和专家示范引入主动悬架 \citep{tan2024active_demo}。
+困难并不只是样本效率。
+对主动悬架而言，危险阶段是早期在线适应：未训练策略可能输出大幅主动作用力，依赖隐藏安全投影，或产生物理执行器无法跟踪的高频命令。
+因此，长期训练后的高回报并不足够；学习过程本身必须保守、可审计，并与实际执行控制输入一致。
+
+本文提出 STG-PPO，一种面向全车主动悬架的保守在线 PPO 框架。
+核心思想是：PPO 不应直接拥有最终执行器命令。
+相反，它应从安全教师附近开始，在可行的增量动作空间中工作，并且只有当当前状态显示存在合理改进机会时才偏离被动悬架。
+具体而言，STG-PPO 结合离线行为克隆、增量动作参数化、安全投影、投影感知 PPO 惩罚和安全教师改进门控。
+该门控不是单纯奖励项；它改变了部署策略类，使 PPO 命令在路面激励或安全裕度不足时自动回退到被动教师。
+
+本文贡献如下：
+\begin{itemize}
+    \item 将主动悬架在线适应表述为投影感知 PPO 问题，并在学习目标中惩罚采样策略动作与执行器可行执行动作之间的不一致。
+    \item 提出安全教师改进门控，将 PPO 从始终主动输出力的控制器转化为围绕被动教师的状态相关残差控制器。
+    \item 构建包含执行器滞后、速率限制、路面预瞄不确定性接口、安全指标和分解奖励日志的 MuJoCo 全车主动悬架基准。
+    \item 通过消融实验表明，STG-PPO 在三个随机种子上均修复了从零训练 PPO 的不安全探索问题，并在比 SAC 更平滑、更执行器可行的条件下保持竞争力。
+\end{itemize}
+
+\section{相关工作}
+
+\paragraph{连续控制强化学习。}
+DDPG 将深度确定性 actor-critic 方法用于连续动作空间 \citep{lillicrap2015ddpg}。
+TD3 通过双 critic 截断、延迟 actor 更新和目标平滑缓解 actor-critic 中的函数逼近误差 \citep{fujimoto2018td3}。
+SAC 优化最大熵目标，在连续控制中通常具有较好的鲁棒性和样本效率 \citep{haarnoja2018sac}。
+PPO 是一种基于裁剪策略比率的 on-policy 方法 \citep{schulman2017ppo}；其保守更新适合在线适应，但标准 PPO 并不知道采样动作是否会被执行器或安全投影修改。
+STG-PPO 正是补足这一部署层缺口。
+
+\paragraph{从示范中学习。}
+示范增强强化学习能够减少早期探索中的不安全或低效行为。
+Deep Q-learning from Demonstrations 表明，专家数据可以加速从零学习成本较高的任务 \citep{hester2018dqfd}。
+主动悬架研究中也已有利用 PID 等专家样本预训练 DRL 的工作 \citep{tan2024active_demo}。
+本文设置有两点不同：教师并非被永久模仿的最终策略；策略是否偏离教师由在线状态相关改进门控控制。
+
+\paragraph{主动悬架与道路预瞄。}
+主动悬架预瞄 MPC 能够显式优化未来舒适性和操纵稳定性 \citep{papadimitrakis2022preview_mpc,li2024speed_preview_mpc}。
+当模型和优化器可靠时，这一路线很强；但计算成本和模型失配仍然是问题。
+近期 DRL 主动悬架方法开始考虑非线性不确定性、专家示范和执行器约束 \citep{tan2024active_demo}。
+STG-PPO 与这些方法互补：它保留 DRL 的适应能力，同时显式限制学习策略在执行器约束下如何偏离安全教师。
+
+\section{问题定义}
+
+本文考虑全车垂向动力学环境，包括车身垂向、俯仰和侧倾，自由四个非簧载轮质量，被动悬架/轮胎元件以及四个主动作用力命令。
+在时刻 $t$，智能体观测
+\begin{equation}
+    o_t = [x_t, p_t, u^{\mathrm{exec}}_{t-1}],
+\end{equation}
+其中 $x_t$ 表示车辆状态，$p_t$ 表示道路预瞄，$u^{\mathrm{exec}}_{t-1}$ 表示上一时刻已执行作用力。
+策略采样归一化动作 $a_t \in [-1,1]^4$。
+环境经过执行器和安全处理后执行作用力：
+\begin{equation}
+    u^{\mathrm{exec}}_t = \Pi_{\mathcal{U}(x_t)}(u^{\mathrm{cmd}}_t),
+\end{equation}
+其中 $\Pi_{\mathcal{U}(x_t)}$ 表示满足力幅值、速率可行性和安全裕度约束的投影。
+
+奖励分解为
+\begin{equation}
+r_t = -(J_{\mathrm{comfort}} + J_{\mathrm{handling}} + J_{\mathrm{act}} + J_{\mathrm{safety}} + J_{\mathrm{dev}}),
+\end{equation}
+其中舒适性项惩罚车身垂向、俯仰和侧倾加速度；操纵稳定性项惩罚悬架与轮胎载荷；执行器项惩罚力幅值、力变化、命令变化、跟踪误差、饱和率和能量代理；偏离项约束策略远离教师或先验控制器的程度。
+评估指标包括回报、不安全步数、车身/俯仰/侧倾加速度 RMS、动作变化 RMS、执行器跟踪 RMS、饱和率和投影误差。
+
+\section{方法}
+
+\subsection{离线教师初始化}
+
+在线 PPO 前，我们从安全被动控制器收集教师轨迹。
+actor 通过行为克隆初始化：
+\begin{equation}
+    \mathcal{L}_{\mathrm{BC}}(\theta)
+    =
+    \mathbb{E}_{(o,u^E)}
+    \left[
+    \left\|
+    \pi_\theta(o) - u^E / u_{\max}
+    \right\|_2^2
+    \right],
+\end{equation}
+其中当前实现中被动教师满足 $u^E=0$。
+这使在线策略从安全行为附近开始，并使后续偏离可度量。
+
+\subsection{增量参数化的投影感知动作空间}
+
+STG-PPO 不将 PPO 输出解释为绝对执行器力，而是解释为相对上一时刻已执行力的有界增量：
+\begin{equation}
+    \tilde{u}_t
+    =
+    \mathrm{clip}\left(
+        u^{\mathrm{exec}}_{t-1}
+        +
+        \eta u_{\max} \tanh(a_t),
+        -\rho u_{\max}, \rho u_{\max}
+    \right),
+\end{equation}
+其中 $\eta$ 控制每步最大力增量，$\rho$ 控制动作幅值上限。
+实际执行为
+\begin{equation}
+    u^{\mathrm{exec}}_t=\Pi_{\mathcal{U}(x_t)}(\tilde{u}_t).
+\end{equation}
+我们记录归一化投影误差
+\begin{equation}
+    e^\Pi_t =
+    \frac{\|\tilde{u}_t-u^{\mathrm{exec}}_t\|_2}{u_{\max}\sqrt{d_u}},
+\end{equation}
+用于度量策略动作在变得可执行前需要被隐藏安全层修改的程度。
+
+\subsection{安全教师改进门控}
+
+本文关键算法组件是状态相关门控 $g_t \in [0,1]$，它将 PPO 动作向被动教师混合：
+\begin{equation}
+    u^{\mathrm{cmd}}_t
+    =
+    g_t \tilde{u}_t + (1-g_t)u^{E}_t.
+\end{equation}
+在当前被动教师设置中，$u^E_t=0$。
+门控由道路预瞄激励、车身姿态加速度需求和安全裕度共同计算：
+\begin{align}
+    g^{p}_t &= \mathrm{clip}\left(
+        \frac{\mathrm{RMS}(p_t)-\tau_p}{\sigma_p},0,1
+    \right),\\
+    g^{a}_t &= \mathrm{clip}\left(
+        \frac{A_t-\tau_a}{\sigma_a},0,1
+    \right),\\
+    g_t &= \mathrm{clip}\left(
+        g_{\min} + (g_{\max}-g_{\min})
+        \max(g^{p}_t,g^{a}_t)g^{s}_t,
+        g_{\min},g_{\max}
+    \right),
+\end{align}
+其中 $A_t$ 综合车身垂向、俯仰和侧倾加速度幅值，$g^s_t$ 在接近安全极限时缩小门控。
+因此 PPO 仅在状态包含主动控制有用且安全的证据时才较强地介入。
+
+\subsection{投影感知 PPO 目标}
+
+PPO 优化裁剪替代目标
+\begin{equation}
+    \mathcal{L}_{\mathrm{clip}}
+    =
+    \mathbb{E}_t
+    \left[
+    \min(\rho_t A_t,\mathrm{clip}(\rho_t,1-\epsilon,1+\epsilon)A_t)
+    \right],
+\end{equation}
+其中 $\rho_t$ 为策略似然比。
+我们加入可行性惩罚：
+\begin{equation}
+    \mathcal{L}
+    =
+    \mathcal{L}_{\mathrm{clip}}
+    -
+    \lambda_\Pi \mathbb{E}_t[\rho_t e^\Pi_t]
+    -
+    \lambda_U \mathbb{E}_t[\rho_t c^{\mathrm{unsafe}}_t]
+    -
+    \lambda_\Delta \mathbb{E}_t[\rho_t \Delta u_t].
+\end{equation}
+这些项避免策略依赖安全层的隐藏修正来满足执行器可行性。
+
+\begin{algorithm}[t]
+\caption{STG-PPO 在线适应}
+\label{alg:stgppo_zh}
+\begin{algorithmic}[1]
+\STATE 收集安全教师轨迹 $\mathcal{D}_E$
+\STATE 通过最小化 $\mathcal{L}_{\mathrm{BC}}$ 初始化 actor
+\FOR{每个在线 episode}
+    \STATE 重置环境并获得 $o_0$
+    \FOR{每个时刻 $t$}
+        \STATE 采样 PPO 动作 $a_t \sim \pi_\theta(\cdot|o_t)$
+        \STATE 将 $a_t$ 转换为增量力 $\tilde{u}_t$
+        \STATE 计算安全教师门控 $g_t$
+        \STATE 混合命令 $u^{\mathrm{cmd}}_t=g_t\tilde{u}_t+(1-g_t)u^E_t$
+        \STATE 执行 $u^{\mathrm{exec}}_t=\Pi_{\mathcal{U}(x_t)}(u^{\mathrm{cmd}}_t)$
+        \STATE 记录奖励分量、投影误差、不安全标记和门控
+    \ENDFOR
+    \STATE 使用投影感知目标更新 PPO
+\ENDFOR
+\end{algorithmic}
+\end{algorithm}
+
+\section{实验设置}
+
+\paragraph{环境。}
+实验使用 MuJoCo 全车主动悬架环境 \citep{todorov2012mujoco}。
+模型包含垂向、俯仰、侧倾、四个非簧载质量、四个道路锚点、被动弹簧阻尼元件和主动悬架力执行器。
+基准包括 B 级和 C 级相关随机路、混合全路面激励、坑洞侧倾和正弦侧倾场景。
+控制器可获得道路预瞄；干净预瞄保留用于诊断和消融。
+
+\paragraph{对比方法。}
+我们比较：（i）从零训练 PPO，使用原始力动作和相同下游安全投影；（ii）BC-PPO，即包含离线模仿、增量动作参数化、投影感知惩罚和安全教师门控的 STG-PPO；（iii）围绕全车 MPC-lite 先验的 residual BC-PPO 变体；（iv）TD3；（v）SAC；以及（vi）被动和 MPC-lite 参考控制器。
+为保证公平，TD3 和 SAC 不继承 PPO 专属动作参数化或安全教师门控。
+
+\paragraph{指标。}
+回报越高越好。
+其他核心指标越低越好：不安全步数、车身/俯仰/侧倾加速度 RMS、动作变化 RMS、执行器跟踪 RMS、饱和率和策略投影误差。
+我们同时报告平均安全教师门控，用于度量 PPO 偏离被动行为的频率。
+
+\section{实验结果}
+
+\subsection{重复随机种子 PPO 消融}
+
+表~\ref{tab:seed_zh} 给出 BC-PPO 相对 PPO scratch 的三种子差值。
+STG-PPO 在每个种子上均支持核心结论：回报提升，不安全步数下降，三类加速度 RMS 均改善，动作变化与跟踪误差下降，投影误差显著下降。
+
+\begin{table}[t]
+\centering
+\caption{重复随机种子证据。Return 差值越高越好，其余差值越低越好。}
+\label{tab:seed_zh}
+\resizebox{\columnwidth}{!}{
+\begin{tabular}{lrrrrrrrr}
+\toprule
+Seed & Return & Unsafe & Body & Pitch & Roll & $\Delta u$ & Track & Proj. \\
+\midrule
+42 & 6326.75 & -20.80 & -1.85 & -2.31 & -3.84 & -158.11 & -235.92 & -0.4800 \\
+43 & 11580.64 & -52.40 & -2.81 & -3.16 & -6.41 & -151.98 & -226.77 & -0.4406 \\
+44 & 10346.37 & -112.40 & -2.32 & -1.04 & -2.99 & -90.57 & -135.15 & -0.3260 \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\subsection{完整矩阵对比}
+
+表~\ref{tab:full_zh} 总结学习控制器均值。
+相较从零训练 PPO，STG-PPO 将不安全步数从 21.0 降至 0.2，将投影误差从 0.4804 降至 0.0005。
+平均门控为 0.2688，说明策略在简单路段保持接近被动，仅在更强激励下打开主动控制。
+
+\begin{table*}[t]
+\centering
+\caption{完整矩阵学习控制器均值。Gate 为平均安全教师改进门控。}
+\label{tab:full_zh}
+\begin{tabular}{llrrrrrrrrr}
+\toprule
+方法 & 控制器 & Return & Unsafe & Body & Pitch & Roll & $\Delta u$ & Track & Proj. & Gate \\
+\midrule
+PPO scratch & PPO & -9962.12 & 21.00 & 2.493 & 5.243 & 3.892 & 169.16 & 252.41 & 0.4804 & 1.000 \\
+STG-PPO & PPO & -3635.37 & 0.20 & 0.639 & 2.929 & 0.053 & 11.05 & 16.49 & 0.0005 & 0.269 \\
+Residual BC-PPO & PPO & -7776.86 & 2.00 & 3.504 & 3.833 & 0.560 & 144.34 & 215.37 & 0.3141 & 1.000 \\
+Safe residual BC-PPO & PPO & -12061.80 & 10.00 & 4.339 & 5.274 & 0.104 & 133.53 & 199.24 & 0.3331 & 1.000 \\
+TD3 & TD3 & -19406.24 & 301.00 & 1.013 & 2.883 & 1.145 & 0.00 & 0.00 & 0.0399 & 1.000 \\
+SAC & SAC & -3307.60 & 0.00 & 0.841 & 2.969 & 0.519 & 151.94 & 226.72 & 0.2888 & 1.000 \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\paragraph{与 SAC 和 TD3 的比较。}
+STG-PPO 并不声称支配所有离策略方法。
+SAC 在该短 e20 实验中具有略好的平均回报和零不安全步。
+然而，SAC 的动作更粗糙、执行器可行性更差：动作变化 RMS 为 151.94 N，而 STG-PPO 为 11.05 N；跟踪 RMS 为 226.72 N，而 STG-PPO 为 16.49 N；投影误差为 0.2888，而 STG-PPO 为 0.0005。
+TD3 在公平基线设置下不稳定，出现 301 个不安全步。
+因此，离策略对比应被解读为一种权衡：STG-PPO 是更平滑、更可执行的在线适应策略，而 SAC 仍是强回报/安全基线。
+
+\subsection{消融解释}
+
+当前 residual-prior 分支仍然较弱。
+这一负结果有价值：如果先验控制器本身与全车基准不匹配，或 residual 动作空间没有像直接增量 PPO 分支那样严格约束，物理先验并不会自动带来收益。
+因此本文将中心放在直接安全教师门控 PPO 机制上，将 residual MPC/LQR 先验作为后续工作。
+
+\section{讨论}
+
+实验结果支持一个窄而重要的结论。
+对主动悬架而言，从零在线 PPO 不可接受，因为它可能输出不安全或不可跟踪的执行器命令。
+当策略似然计算基于采样动作，而环境实际执行的是被投影后的作用力时，仅添加标量奖励惩罚是不充分的。
+STG-PPO 同时改变学习目标和部署策略类：策略从安全教师附近初始化，被参数化为增量作用力，因投影不一致受惩罚，并由状态相关改进证据控制门控开启。
+
+当前门控是人工设计且可解释的。
+这有利于调试和部署审计，但更强的 CCF-A 级贡献可以将其替换为学习型改进证书。
+例如，可以训练一个被动-vs-主动 advantage critic，在道路预瞄不确定性下估计开启门控收益的置信下界。
+门控随后可从数据中学习，同时保留安全原则：除非改进很可能为正，否则不偏离安全教师。
+
+\section{局限性}
+
+第一，当前证据仅来自仿真，并且训练为较短的 e20 运行。
+第二，SAC 在回报和安全上仍然具有竞争力，因此本文当前主张是执行器可行性和在线 PPO 修复，而非普遍优越性。
+第三，被动教师在若干路面上较强；需要更困难的路面、载荷变化和参数随机化来证明主动作用力何时不可或缺。
+第四，当前门控使用手工阈值。
+第五，投稿前应继续扩展并核验近期主动悬架 DRL 相关工作。
+
+\section{结论}
+
+本文提出 STG-PPO，一种用于全车主动悬架控制的离线模仿初始化、投影感知、安全教师门控 PPO 框架。
+该方法解决连续动作 RL 中一个部署相关问题：当执行器和安全投影会显著修改采样动作时，策略不应被训练成仿佛原始采样动作会被直接执行。
+在三个随机种子上，STG-PPO 相对从零训练 PPO 在回报、安全、舒适性、动作平滑性、执行器跟踪和投影误差上均稳定改善。
+在完整矩阵中，它与 SAC 保持竞争，同时产生更平滑、更可执行的命令。
+下一步是将改进门控学习为不确定性感知证书，并在被动控制不足的更困难道路分布上评估。
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}

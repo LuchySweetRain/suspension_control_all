@@ -11,6 +11,7 @@ Target framing:
 Files:
 
 - `main.tex`: full paper draft.
+- `main_zh.tex`: Chinese version with the same technical content and experimental evidence.
 - `references.bib`: verified core references used by the current draft.
 
 Build:
@@ -21,6 +22,10 @@ pdflatex main
 bibtex main
 pdflatex main
 pdflatex main
+xelatex main_zh
+bibtex main_zh
+xelatex main_zh
+xelatex main_zh
 ```
 
 The draft uses an article fallback so it can compile without a downloaded conference style. For final AAAI submission, place the official `aaai2026.sty` and `aaai2026.bst` from the AAAI author kit in this directory and replace the fallback preamble with the official template preamble.
