@@ -1,0 +1,335 @@
+\documentclass[letterpaper,twocolumn]{article}
+
+\usepackage[margin=0.75in]{geometry}
+\usepackage{times}
+\usepackage{helvet}
+\usepackage{courier}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{multirow}
+\usepackage{url}
+\usepackage[hidelinks]{hyperref}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{microtype}
+\usepackage[numbers,sort&compress]{natbib}
+
+\title{Safe-Teacher Gated Projection-Aware PPO for Actuator-Feasible Full-Car Active Suspension Control}
+
+\author{Anonymous Authors}
+
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Deep reinforcement learning (DRL) is attractive for active suspension control because it can adapt to nonlinear road--vehicle interactions without requiring a perfectly identified plant model.
+Yet direct continuous-action RL is poorly matched to safety-critical suspension deployment: random online exploration can create excessive body acceleration, unsafe suspension travel, actuator-rate violations, and a mismatch between sampled policy actions and the force actually executed after actuator and safety projection.
+This paper proposes Safe-Teacher Gated Projection-Aware PPO (STG-PPO), an offline-to-online control framework for full-car active suspension.
+The controller first initializes PPO by behavior cloning a safe passive teacher, then constrains online PPO through three deployment-aware mechanisms: a delta-parameterized action space tied to the previously executed force, projection-consistency and actuator-feasibility regularization, and a state-dependent safe-teacher improvement gate that permits active force only when road preview excitation, body attitude acceleration, and safety margin indicate that deviation from the passive teacher is justified.
+On a MuJoCo full-car benchmark with correlated ISO-style roads, pothole-roll, sine-roll, and mixed-road scenarios, STG-PPO improves over PPO from scratch on all core safety and feasibility metrics across three seeds.
+In the full matrix, STG-PPO reduces unsafe steps from 21.0 to 0.2, action-delta RMS from 169.16 N to 11.05 N, actuator tracking RMS from 252.41 N to 16.49 N, and policy projection error from 0.4804 to 0.0005.
+Against SAC, STG-PPO is slightly lower in return but substantially smoother and less projection-dependent.
+These results support a focused claim: safe-teacher gated online PPO is a viable and auditable path to actuator-feasible active-suspension adaptation, rather than an unconstrained replacement for classical or off-policy controllers.
+\end{abstract}
+
+\section{Introduction}
+
+Active suspension systems can improve ride comfort and handling by applying controlled vertical forces between the vehicle body and wheels.
+Modern perception and road-preview systems further make proactive suspension control possible, but they also introduce a difficult learning-control problem: the controller must exploit preview information, respect suspension travel and tire-load limits, and remain feasible under actuator lag and force-rate constraints.
+Model predictive control (MPC) with road preview is a natural solution because it can encode constraints explicitly \citep{papadimitrakis2022preview_mpc,li2024speed_preview_mpc}.
+However, accurate full-car models, online optimization cost, perception delay, and unmodeled actuator dynamics make purely model-based control brittle in deployment.
+
+Deep RL provides an appealing alternative because continuous-action actor-critic methods such as PPO \citep{schulman2017ppo}, TD3 \citep{fujimoto2018td3}, and SAC \citep{haarnoja2018sac} can learn nonlinear feedback policies in simulation.
+Recent work has begun to apply DRL and demonstrations to active suspension \citep{tan2024active_demo}.
+The obstacle is not simply sample efficiency.
+For active suspension, the dangerous regime is early online adaptation: an untrained policy can issue large actuator forces, rely on hidden safety projection, or produce high-frequency commands that cannot be tracked by the physical actuator.
+In this setting, a high return after long training is not sufficient; the learning process itself must be conservative, auditable, and aligned with the actually executed control input.
+
+This paper develops Safe-Teacher Gated Projection-Aware PPO (STG-PPO), a conservative online PPO framework for full-car active suspension.
+The central idea is that PPO should not directly own the actuator command.
+Instead, it should begin near a safe teacher, operate in a feasible incremental action space, and earn deviations from passive suspension only when the current state indicates a plausible improvement opportunity.
+Concretely, STG-PPO combines offline behavior cloning, delta-parameterized actions, safety projection, projection-aware PPO penalties, and a safe-teacher improvement gate.
+The gate is not merely a reward term: it changes the deployed policy class by blending PPO commands toward the passive teacher whenever road excitation or safety margin is insufficient.
+
+The contributions are:
+\begin{itemize}
+    \item We formulate active suspension online adaptation as a projection-aware PPO problem in which the learning objective penalizes mismatch between sampled policy actions and actuator-feasible executed actions.
+    \item We introduce a safe-teacher improvement gate that converts PPO from an always-active force generator into a state-dependent residual over a passive teacher.
+    \item We provide a full-car MuJoCo benchmark with actuator lag, rate limits, road preview uncertainty hooks, safety metrics, and decomposed reward logging.
+    \item We report ablations showing that STG-PPO consistently repairs unsafe PPO exploration across three seeds and is competitive with SAC while using far smoother and more actuator-feasible commands.
+\end{itemize}
+
+\section{Related Work}
+
+\paragraph{Continuous-control RL.}
+DDPG introduced deep deterministic actor-critic learning for continuous action spaces \citep{lillicrap2015ddpg}.
+TD3 reduces actor-critic overestimation through clipped double critics, delayed actor updates, and target smoothing \citep{fujimoto2018td3}.
+SAC optimizes a maximum-entropy objective and is often robust and sample-efficient in continuous control \citep{haarnoja2018sac}.
+PPO is an on-policy method with clipped policy-ratio updates \citep{schulman2017ppo}; its conservative update is attractive for online adaptation, but the standard formulation does not know whether sampled actions will later be modified by actuator or safety projection.
+STG-PPO addresses this missing deployment layer.
+
+\paragraph{Learning from demonstrations.}
+Demonstration-augmented RL can reduce unsafe or inefficient early exploration.
+Deep Q-learning from demonstrations showed that expert data can accelerate RL in domains where learning from scratch is costly \citep{hester2018dqfd}.
+Active suspension work has also explored expert demonstrations, for example by pretraining DRL from PID samples \citep{tan2024active_demo}.
+Our setting differs in two ways: the teacher is not treated as a final policy to imitate forever, and deviation from the teacher is controlled online by a state-dependent improvement gate.
+
+\paragraph{Active suspension and road preview.}
+Preview MPC for active suspension explicitly optimizes future comfort and handling under road-preview information \citep{papadimitrakis2022preview_mpc,li2024speed_preview_mpc}.
+This line is strong when the model and optimizer are reliable, but computational cost and model mismatch remain concerns.
+Recent DRL approaches consider nonlinear uncertainty, expert demonstrations, and actuator constraints in active suspension \citep{tan2024active_demo}.
+STG-PPO is complementary: it keeps the adaptive capacity of DRL while explicitly constraining how the learned policy may depart from a safe teacher under actuator limits.
+
+\section{Problem Formulation}
+
+We consider a full-car vertical dynamics environment with sprung-body heave, pitch, and roll; four unsprung wheel masses; passive suspension and tire elements; and four active force commands.
+At time $t$, the agent observes
+\begin{equation}
+    o_t = [x_t, p_t, u^{\mathrm{exec}}_{t-1}],
+\end{equation}
+where $x_t$ includes vehicle states, $p_t$ is road preview, and $u^{\mathrm{exec}}_{t-1}$ is the previously executed actuator force.
+The policy samples a normalized action $a_t \in [-1,1]^4$.
+The environment executes a force after actuator and safety processing:
+\begin{equation}
+    u^{\mathrm{exec}}_t = \Pi_{\mathcal{U}(x_t)}(u^{\mathrm{cmd}}_t),
+\end{equation}
+where $\Pi_{\mathcal{U}(x_t)}$ enforces force magnitude, rate feasibility, and safety-margin constraints.
+
+The reward is decomposed as
+\begin{equation}
+r_t = -(J_{\mathrm{comfort}} + J_{\mathrm{handling}} + J_{\mathrm{act}} + J_{\mathrm{safety}} + J_{\mathrm{dev}}),
+\end{equation}
+with comfort penalties on body heave, pitch, and roll accelerations; handling penalties on suspension and tire-load terms; actuator penalties on force magnitude, force delta, command delta, tracking error, saturation, and energy proxy; and optional deviation from a teacher or prior.
+We evaluate policies using return, unsafe steps, body/pitch/roll acceleration RMS, action-delta RMS, actuator tracking RMS, saturation ratio, and projection error.
+
+\section{Method}
+
+\subsection{Offline Teacher Initialization}
+
+Before online PPO, we collect safe teacher trajectories from a passive controller.
+The actor is behavior-cloned with
+\begin{equation}
+    \mathcal{L}_{\mathrm{BC}}(\theta)
+    =
+    \mathbb{E}_{(o,u^E)}
+    \left[
+    \left\|
+    \pi_\theta(o) - u^E / u_{\max}
+    \right\|_2^2
+    \right],
+\end{equation}
+where $u^E=0$ for the passive teacher in the current implementation.
+This gives the online policy a safe initial behavior and makes subsequent deviations measurable.
+
+\subsection{Delta-Parameterized Projection-Aware Action Space}
+
+Instead of interpreting PPO output as an absolute actuator force, STG-PPO interprets it as a bounded increment from the previous executed force:
+\begin{equation}
+    \tilde{u}_t
+    =
+    \mathrm{clip}\left(
+        u^{\mathrm{exec}}_{t-1}
+        +
+        \eta u_{\max} \tanh(a_t),
+        -\rho u_{\max}, \rho u_{\max}
+    \right),
+\end{equation}
+where $\eta$ controls the maximum per-step force increment and $\rho$ bounds the action magnitude.
+The projected execution is
+\begin{equation}
+    u^{\mathrm{exec}}_t=\Pi_{\mathcal{U}(x_t)}(\tilde{u}_t).
+\end{equation}
+We log the normalized projection error
+\begin{equation}
+    e^\Pi_t =
+    \frac{\|\tilde{u}_t-u^{\mathrm{exec}}_t\|_2}{u_{\max}\sqrt{d_u}},
+\end{equation}
+which measures how much hidden correction is required before the policy becomes feasible.
+
+\subsection{Safe-Teacher Improvement Gate}
+
+The key algorithmic addition is a state-dependent gate $g_t \in [0,1]$ that blends the PPO action toward the passive teacher:
+\begin{equation}
+    u^{\mathrm{cmd}}_t
+    =
+    g_t \tilde{u}_t + (1-g_t)u^{E}_t.
+\end{equation}
+In the current passive-teacher setting, $u^E_t=0$.
+The gate is computed from road preview excitation, body attitude acceleration demand, and safety margin:
+\begin{align}
+    g^{p}_t &= \mathrm{clip}\left(
+        \frac{\mathrm{RMS}(p_t)-\tau_p}{\sigma_p},0,1
+    \right),\\
+    g^{a}_t &= \mathrm{clip}\left(
+        \frac{A_t-\tau_a}{\sigma_a},0,1
+    \right),\\
+    g_t &= \mathrm{clip}\left(
+        g_{\min} + (g_{\max}-g_{\min})
+        \max(g^{p}_t,g^{a}_t)g^{s}_t,
+        g_{\min},g_{\max}
+    \right),
+\end{align}
+where $A_t$ combines heave, pitch, and roll acceleration magnitudes, and $g^s_t$ shrinks the gate near safety-limit margins.
+Thus PPO acts aggressively only when the state contains evidence that active force is useful and safe.
+
+\subsection{Projection-Aware PPO Objective}
+
+PPO optimizes the clipped surrogate objective
+\begin{equation}
+    \mathcal{L}_{\mathrm{clip}}
+    =
+    \mathbb{E}_t
+    \left[
+    \min(\rho_t A_t,\mathrm{clip}(\rho_t,1-\epsilon,1+\epsilon)A_t)
+    \right],
+\end{equation}
+where $\rho_t$ is the policy likelihood ratio.
+We add feasibility penalties:
+\begin{equation}
+    \mathcal{L}
+    =
+    \mathcal{L}_{\mathrm{clip}}
+    -
+    \lambda_\Pi \mathbb{E}_t[\rho_t e^\Pi_t]
+    -
+    \lambda_U \mathbb{E}_t[\rho_t c^{\mathrm{unsafe}}_t]
+    -
+    \lambda_\Delta \mathbb{E}_t[\rho_t \Delta u_t].
+\end{equation}
+The penalties discourage actions that become feasible only because the safety layer silently changes them.
+
+\begin{algorithm}[t]
+\caption{STG-PPO Online Adaptation}
+\label{alg:stgppo}
+\begin{algorithmic}[1]
+\STATE Collect safe teacher trajectories $\mathcal{D}_E$
+\STATE Initialize actor by minimizing $\mathcal{L}_{\mathrm{BC}}$
+\FOR{each online episode}
+    \STATE Reset environment and obtain $o_0$
+    \FOR{each step $t$}
+        \STATE Sample PPO action $a_t \sim \pi_\theta(\cdot|o_t)$
+        \STATE Convert $a_t$ to delta force $\tilde{u}_t$
+        \STATE Compute safe-teacher gate $g_t$
+        \STATE Blend command $u^{\mathrm{cmd}}_t=g_t\tilde{u}_t+(1-g_t)u^E_t$
+        \STATE Execute $u^{\mathrm{exec}}_t=\Pi_{\mathcal{U}(x_t)}(u^{\mathrm{cmd}}_t)$
+        \STATE Log reward components, projection error, unsafe flag, and gate
+    \ENDFOR
+    \STATE Update PPO using projection-aware objective
+\ENDFOR
+\end{algorithmic}
+\end{algorithm}
+
+\section{Experimental Setup}
+
+\paragraph{Environment.}
+Experiments use a MuJoCo full-car active-suspension environment \citep{todorov2012mujoco}.
+The model includes heave, pitch, roll, four unsprung masses, four road anchors, passive spring-damper elements, and active suspension force actuators.
+The benchmark includes class-B and class-C correlated random roads, mixed full-road excitation, pothole-roll, and sine-roll scenarios.
+Road preview is available to the controller, while clean preview is retained for diagnostics and ablation.
+
+\paragraph{Compared methods.}
+We compare: (i) PPO from scratch with raw-force actions and the same downstream safety projection; (ii) BC-PPO with offline imitation, delta action parameterization, projection-aware penalties, and the safe-teacher gate; (iii) residual BC-PPO variants around a full-car MPC-lite prior; (iv) TD3; (v) SAC; and (vi) passive and MPC-lite reference controllers.
+For fair off-policy baselines, TD3 and SAC do not inherit PPO-specific action parameterization or safe-teacher gating.
+
+\paragraph{Metrics.}
+Higher return is better.
+For all other core metrics, lower is better: unsafe steps, body/pitch/roll acceleration RMS, action-delta RMS, actuator tracking RMS, saturation ratio, and policy projection error.
+We also report the mean safe-teacher gate to measure how often PPO departs from passive behavior.
+
+\section{Results}
+
+\subsection{Repeated-Seed PPO Ablation}
+
+Table~\ref{tab:seed} reports BC-PPO minus PPO-scratch deltas across three seeds.
+STG-PPO supports the core claim on every seed: return improves, unsafe steps decrease, all three acceleration RMS metrics improve, action-delta and tracking errors decrease, and projection error drops.
+
+\begin{table}[t]
+\centering
+\caption{Repeated-seed evidence. Return delta is higher-is-better; other deltas are lower-is-better.}
+\label{tab:seed}
+\resizebox{\columnwidth}{!}{
+\begin{tabular}{lrrrrrrrr}
+\toprule
+Seed & Return & Unsafe & Body & Pitch & Roll & $\Delta u$ & Track & Proj. \\
+\midrule
+42 & 6326.75 & -20.80 & -1.85 & -2.31 & -3.84 & -158.11 & -235.92 & -0.4800 \\
+43 & 11580.64 & -52.40 & -2.81 & -3.16 & -6.41 & -151.98 & -226.77 & -0.4406 \\
+44 & 10346.37 & -112.40 & -2.32 & -1.04 & -2.99 & -90.57 & -135.15 & -0.3260 \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\subsection{Full-Matrix Comparison}
+
+Table~\ref{tab:full} summarizes learned-controller means.
+Compared with PPO from scratch, STG-PPO reduces unsafe steps from 21.0 to 0.2 and projection error from 0.4804 to 0.0005.
+The mean gate is 0.2688, indicating that the policy remains near passive on easy segments and opens mainly under stronger excitation.
+
+\begin{table*}[t]
+\centering
+\caption{Full-matrix learned-controller means. Gate is the mean safe-teacher improvement gate.}
+\label{tab:full}
+\begin{tabular}{llrrrrrrrrr}
+\toprule
+Variant & Ctrl. & Return & Unsafe & Body & Pitch & Roll & $\Delta u$ & Track & Proj. & Gate \\
+\midrule
+PPO scratch & PPO & -9962.12 & 21.00 & 2.493 & 5.243 & 3.892 & 169.16 & 252.41 & 0.4804 & 1.000 \\
+STG-PPO & PPO & -3635.37 & 0.20 & 0.639 & 2.929 & 0.053 & 11.05 & 16.49 & 0.0005 & 0.269 \\
+Residual BC-PPO & PPO & -7776.86 & 2.00 & 3.504 & 3.833 & 0.560 & 144.34 & 215.37 & 0.3141 & 1.000 \\
+Safe residual BC-PPO & PPO & -12061.80 & 10.00 & 4.339 & 5.274 & 0.104 & 133.53 & 199.24 & 0.3331 & 1.000 \\
+TD3 & TD3 & -19406.24 & 301.00 & 1.013 & 2.883 & 1.145 & 0.00 & 0.00 & 0.0399 & 1.000 \\
+SAC & SAC & -3307.60 & 0.00 & 0.841 & 2.969 & 0.519 & 151.94 & 226.72 & 0.2888 & 1.000 \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\paragraph{Against SAC and TD3.}
+STG-PPO is not claimed to dominate all off-policy methods.
+SAC has slightly better mean return and zero unsafe steps in this short e20 run.
+However, SAC uses much rougher and less actuator-feasible commands: action-delta RMS is 151.94 N versus 11.05 N for STG-PPO, tracking RMS is 226.72 N versus 16.49 N, and projection error is 0.2888 versus 0.0005.
+TD3 is unstable in this fair-baseline setting, with 301 unsafe steps.
+We therefore interpret the off-policy comparison as evidence of a tradeoff: STG-PPO is the smoother, more executable online-adaptation policy, while SAC remains a strong return/safety baseline.
+
+\subsection{Ablation Interpretation}
+
+The residual-prior branches remain weak in the current implementation.
+This negative result is useful: a physics prior is not automatically beneficial if the prior controller is itself poorly matched to the full-car benchmark or if the residual action space is not constrained as carefully as the direct delta PPO branch.
+The paper therefore centers on the direct safe-teacher gated PPO mechanism and treats residual MPC/LQR priors as future work.
+
+\section{Discussion}
+
+The results support a narrow but important claim.
+For active suspension, online PPO from scratch is not acceptable because it can issue unsafe or untrackable actuator commands.
+Adding only scalar reward penalties is insufficient when the policy likelihood is computed on actions that differ from the executed projected force.
+STG-PPO changes both the learning objective and deployed policy class: the policy is initialized near a safe teacher, parameterized as an incremental force, penalized for projection mismatch, and gated by state-dependent evidence for improvement.
+
+The current gate is hand-designed and interpretable.
+This is useful for debugging and deployment audits, but a stronger CCF-A contribution would replace it with a learned improvement certificate.
+For example, a passive-vs-active advantage critic could estimate a lower confidence bound on the benefit of opening the gate under road-preview uncertainty.
+The gate would then be learned from data while preserving the safety principle: do not deviate from the safe teacher unless improvement is likely.
+
+\section{Limitations}
+
+First, the evidence is simulation-only and uses short e20 runs.
+Second, SAC remains competitive in return and safety, so the current claim is actuator feasibility and online PPO repair, not universal superiority.
+Third, the passive teacher is strong on several roads; harder road classes and payload/parameter variation are needed to show when active force is essential.
+Fourth, the current gate uses hand-tuned thresholds.
+Fifth, the related-work section should be expanded with additional verified recent active-suspension DRL papers before submission.
+
+\section{Conclusion}
+
+We presented STG-PPO, an offline-imitation-initialized, projection-aware, safe-teacher-gated PPO framework for full-car active suspension control.
+The method addresses a deployment-specific problem in continuous-action RL: the policy should not be trained as if raw sampled actions are executed when actuator and safety projection substantially modify them.
+Across three seeds, STG-PPO consistently improves over PPO from scratch on return, safety, comfort, action smoothness, actuator tracking, and projection error.
+In the full matrix, it is competitive with SAC while producing much smoother and more executable commands.
+The next step is to learn the improvement gate as an uncertainty-aware certificate and to evaluate on harder road distributions where passive control is insufficient.
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}
