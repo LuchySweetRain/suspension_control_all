@@ -111,7 +111,28 @@ r_t = -(J_{\mathrm{comfort}} + J_{\mathrm{handling}} + J_{\mathrm{act}} + J_{\ma
 其中舒适性项惩罚车身垂向、俯仰和侧倾加速度；操纵稳定性项惩罚悬架与轮胎载荷；执行器项惩罚力幅值、力变化、命令变化、跟踪误差、饱和率和能量代理；偏离项约束策略远离教师或先验控制器的程度。
 评估指标包括回报、不安全步数、车身/俯仰/侧倾加速度 RMS、动作变化 RMS、执行器跟踪 RMS、饱和率和投影误差。
 
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{figures/suspension_force_model.png}
+\caption{全车主动悬架受力模型示意图。图中标出车身垂向/俯仰/侧倾动力学、四角非簧载质量、悬架与轮胎受力路径、主动执行器作用力以及力幅值/力变化率约束。}
+\label{fig:suspension_force_model_zh}
+\end{figure*}
+
 \section{方法}
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{figures/control_pipeline.png}
+\caption{STG-PPO 控制流程。离线安全教师轨迹通过行为克隆初始化 PPO；在线适应阶段，策略输出有界作用力增量，安全教师改进门控决定何时允许主动作用力，执行器/安全投影层产生实际执行力，并输入全车模型和奖励日志。}
+\label{fig:control_pipeline_zh}
+\end{figure*}
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{figures/network_architecture.png}
+\caption{策略与训练网络结构。车辆状态、道路预瞄、上一时刻执行力和安全裕度被编码为共享隐变量，并分别输入 actor、critic、安全教师门控和投影感知辅助头。在线目标结合 PPO、行为克隆初始化、投影一致性、动作平滑性和安全惩罚。}
+\label{fig:network_architecture_zh}
+\end{figure*}
 
 \subsection{离线教师初始化}
 

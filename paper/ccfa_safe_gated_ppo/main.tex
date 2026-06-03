@@ -107,7 +107,28 @@ r_t = -(J_{\mathrm{comfort}} + J_{\mathrm{handling}} + J_{\mathrm{act}} + J_{\ma
 with comfort penalties on body heave, pitch, and roll accelerations; handling penalties on suspension and tire-load terms; actuator penalties on force magnitude, force delta, command delta, tracking error, saturation, and energy proxy; and optional deviation from a teacher or prior.
 We evaluate policies using return, unsafe steps, body/pitch/roll acceleration RMS, action-delta RMS, actuator tracking RMS, saturation ratio, and projection error.
 
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{figures/suspension_force_model.png}
+\caption{Full-car active-suspension force model used by the benchmark. The diagram highlights sprung-body heave/pitch/roll dynamics, four corner unsprung masses, suspension and tire force paths, active actuator forces, and force/rate constraints.}
+\label{fig:suspension_force_model}
+\end{figure*}
+
 \section{Method}
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{figures/control_pipeline.png}
+\caption{STG-PPO control pipeline. Offline safe-teacher trajectories initialize PPO by behavior cloning. During online adaptation, the learned policy outputs bounded force increments, a safe-teacher improvement gate decides when active force is justified, and the actuator/safety projection layer produces the executed force used by the full-car plant and reward logger.}
+\label{fig:control_pipeline}
+\end{figure*}
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{figures/network_architecture.png}
+\caption{Policy and training network architecture. Vehicle state, road preview, previous executed force, and safety margins are encoded into a shared latent representation feeding actor, critic, safe-teacher gate, and projection-aware auxiliary heads. The online objective combines PPO, behavior-cloning initialization, projection consistency, action smoothness, and safety penalties.}
+\label{fig:network_architecture}
+\end{figure*}
 
 \subsection{Offline Teacher Initialization}
 
