@@ -1,0 +1,12 @@
+backend: rk4
+dt: 0.001
+duration: 2.0
+params:
+  sprung_mass_kg: 375.0
+  unsprung_mass_kg: 59.0
+  suspension_stiffness_npm: 35000.0
+  suspension_damping_nspm: 1000.0
+  tire_stiffness_npm: 190000.0
+  tire_damping_nspm: 100.0
+  force_limit_n: 3500.0
+  force_rate_limit_nps: 20000.0
