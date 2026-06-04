@@ -109,6 +109,10 @@ class QuarterCarChronoBackend:
     def _build_system(self) -> None:
         chrono = self.chrono
         p = self.params
+        self.z_s_eq = 0.6
+        self.z_u_eq = 0.15
+        self.suspension_free_length = self.z_s_eq - self.z_u_eq
+        self.tire_free_length = self.z_u_eq
         self.system = chrono.ChSystemNSC()
         self.system.SetGravitationalAcceleration(chrono.ChVector3d(0.0, 0.0, -9.81))
 
@@ -118,12 +122,12 @@ class QuarterCarChronoBackend:
 
         self.sprung = chrono.ChBody()
         self.sprung.SetMass(p.sprung_mass_kg)
-        self.sprung.SetPos(chrono.ChVector3d(0.0, 0.0, 0.6))
+        self.sprung.SetPos(chrono.ChVector3d(0.0, 0.0, self.z_s_eq))
         self.system.AddBody(self.sprung)
 
         self.unsprung = chrono.ChBody()
         self.unsprung.SetMass(p.unsprung_mass_kg)
-        self.unsprung.SetPos(chrono.ChVector3d(0.0, 0.0, 0.15))
+        self.unsprung.SetPos(chrono.ChVector3d(0.0, 0.0, self.z_u_eq))
         self.system.AddBody(self.unsprung)
 
         self.suspension = chrono.ChLinkTSDA()
@@ -131,11 +135,15 @@ class QuarterCarChronoBackend:
             self.sprung,
             self.unsprung,
             False,
-            chrono.ChVector3d(0.0, 0.0, 0.6),
-            chrono.ChVector3d(0.0, 0.0, 0.15),
+            chrono.ChVector3d(0.0, 0.0, self.z_s_eq),
+            chrono.ChVector3d(0.0, 0.0, self.z_u_eq),
         )
         self.suspension.SetSpringCoefficient(p.suspension_stiffness_npm)
         self.suspension.SetDampingCoefficient(p.suspension_damping_nspm)
+        # TSDA compression force is created when current length is below rest length.
+        # Set static preload so the nominal initial pose balances gravity.
+        suspension_static_compression = p.sprung_mass_kg * 9.81 / p.suspension_stiffness_npm
+        self.suspension.SetRestLength(self.suspension_free_length + suspension_static_compression)
         self.system.AddLink(self.suspension)
 
         self.tire = chrono.ChLinkTSDA()
@@ -143,11 +151,13 @@ class QuarterCarChronoBackend:
             self.unsprung,
             self.ground,
             False,
-            chrono.ChVector3d(0.0, 0.0, 0.15),
+            chrono.ChVector3d(0.0, 0.0, self.z_u_eq),
             chrono.ChVector3d(0.0, 0.0, 0.0),
         )
         self.tire.SetSpringCoefficient(p.tire_stiffness_npm)
         self.tire.SetDampingCoefficient(p.tire_damping_nspm)
+        tire_static_compression = (p.sprung_mass_kg + p.unsprung_mass_kg) * 9.81 / p.tire_stiffness_npm
+        self.tire.SetRestLength(self.tire_free_length + tire_static_compression)
         self.system.AddLink(self.tire)
 
     def reset(self) -> np.ndarray:
@@ -155,8 +165,8 @@ class QuarterCarChronoBackend:
         return self._state(0.0)
 
     def _state(self, road: float) -> np.ndarray:
-        z_s = self.sprung.GetPos().z - 0.6
-        z_u = self.unsprung.GetPos().z - 0.15 + road
+        z_s = self.sprung.GetPos().z - self.z_s_eq
+        z_u = self.unsprung.GetPos().z - self.z_u_eq
         return np.array(
             [
                 z_s,
@@ -168,7 +178,11 @@ class QuarterCarChronoBackend:
         )
 
     def step(self, active_force: float, road: float, road_dot: float) -> np.ndarray:
-        self.suspension.SetActuatorForce(float(active_force))
+        # Chrono TSDA actuator force is positive in tension along the link.
+        # The project convention treats positive active_force as the RK4 force
+        # added to the unsprung-mass equation and subtracted from the sprung
+        # equation, so the Chrono command must be sign-flipped.
+        self.suspension.SetActuatorForce(float(-active_force))
         self.ground.SetPos(self.chrono.ChVector3d(0.0, 0.0, float(road)))
         self.system.DoStepDynamics(self.dt)
         return self._state(road)
